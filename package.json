@@ -1,0 +1,59 @@
+{
+  "name": "koko-photobooth",
+  "productName": "KOKO Studio",
+  "version": "0.1.20",
+  "description": "KOKO Studio event photo booth",
+  "author": "KOKO",
+  "main": ".vite/build/main.cjs",
+  "scripts": {
+    "start": "electron-forge start",
+    "typecheck": "tsc --noEmit",
+    "test:storage": "node --test tests/photo-store.test.cjs",
+    "test:video-storage": "node --test tests/video-store.test.cjs",
+    "test:camera": "node --test tests/camera-manager.test.cjs",
+    "test:capture": "node --test tests/capture-authorization.test.cjs",
+    "test:capture-sessions": "node --test tests/capture-session-store.test.cjs",
+    "test:photo-cloud": "node --test tests/photo-cloud-client.test.cjs",
+    "test:photo-cloud-recovery": "node --test tests/photo-cloud-recovery.test.cjs",
+    "test:qr": "node --test tests/qr-code.test.cjs",
+    "test:capture-delay": "node --test tests/capture-delay.test.cjs",
+    "test:license": "node --test tests/license-verifier.test.cjs",
+    "test:license-runtime": "node --test tests/license-runtime.test.cjs",
+    "test:license-server": "node --test tests/license-server.test.cjs",
+    "license:server": "node --env-file-if-exists=.env server/license-server.cjs",
+    "license:keygen": "node scripts/generate-license-keys.cjs",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "make:mac:arm64": "electron-forge make --platform=darwin --arch=arm64",
+    "make:mac:x64": "electron-forge make --platform=darwin --arch=x64",
+    "brand:icon": "node scripts/generate-koko-studio-icon.cjs",
+    "test:template-layout": "node --test tests/template-layout.test.cjs",
+    "test:template-layers": "node --test tests/template-layers.test.cjs"
+  },
+  "dependencies": {
+    "@fontsource/cormorant-garamond": "5.3.0",
+    "@fontsource/noto-sans-thai": "5.3.0",
+    "@types/qrcode": "^1.5.5",
+    "electron-squirrel-startup": "1.0.1",
+    "qrcode": "^1.5.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/maker-squirrel": "8.0.1",
+    "@electron-forge/maker-zip": "^8.0.1",
+    "@electron-forge/plugin-vite": "8.0.1",
+    "@types/node": "24.10.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "electron": "44.5.0",
+    "pngjs": "5.0.0",
+    "typescript": "6.0.2",
+    "vite": "7.3.1"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "electron-winstaller@5.4.4": true
+  }
+}

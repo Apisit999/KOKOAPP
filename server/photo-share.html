@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>KOKO Photo Folder</title>
+  <link rel="stylesheet" href="/photo-share.css">
+  <script defer src="/photo-share.js"></script>
+</head>
+<body>
+  <main>
+    <header><span class="brand">KOKO</span><span>PRIVATE PHOTO FOLDER</span></header>
+    <section id="status" role="status">กำลังเปิดโฟลเดอร์ภาพ…</section>
+    <section id="folder" hidden>
+      <h1 id="folder-name"></h1>
+      <p id="photo-count"></p>
+      <p id="album-expiry" class="album-expiry"></p>
+      <div id="photos" class="photos"></div>
+    </section>
+  </main>
+</body>
+</html>

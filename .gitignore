@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Electron / Forge builds
+out/
+out-*/
+dist/
+release/
+artifacts/
+
+# Installers
+*.exe
+*.msi
+*.dmg
+*.pkg
+*.app
+*.nupkg
+*.blockmap
+
+# Vite / Electron temporary files
+.vite/
+.tmp-app-asar-inspect/
+src/renderer/.vite/
+
+# Secrets
+secrets/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.tmp
+*.temp
+
+# Local application data
+data/
+storage/
+photos/

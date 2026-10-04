@@ -1,0 +1,16 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #090909; color: #f4efe1; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at top, #201b10, #090909 48rem); }
+main { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 64px; }
+header { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid #382e19; padding-bottom: 18px; color: #b9a675; letter-spacing: .16em; font-size: .75rem; }
+.brand { color: #e2c77f; font: 2rem Georgia, serif; letter-spacing: .12em; }
+h1 { font: 2rem Georgia, serif; font-weight: 400; margin: 28px 0 8px; }
+#status, #photo-count { color: #c5b995; padding: 24px 0; }
+.album-expiry { color: #c5b995; font-size: .9rem; }
+.photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+article { border: 1px solid #302818; border-radius: 12px; background: #111; overflow: hidden; }
+article img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #080808; }
+article video { display: block; width: 100%; max-height: 65vh; background: #080808; }
+article button { margin:12px; min-height:42px; padding:0 14px; border:1px solid #8f7747; border-radius:7px; background:#201b10; color:#f0d181; font:inherit; cursor:pointer; }
+article a { display: block; padding: 12px; color: #e2c77f; text-decoration: none; }
+article a:hover { background: #1d190f; }
