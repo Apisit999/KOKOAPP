@@ -30,7 +30,7 @@ const bridge: Bridge = {
   saveVideo: (webmBytes, width, height, durationMs, captureAuthorization) => ipcRenderer.invoke('koko:save-video', webmBytes, width, height, durationMs, captureAuthorization),
   readVideo: id => ipcRenderer.invoke('koko:read-video', id),
   exportVideo: id => ipcRenderer.invoke('koko:export-video', id),
-  listCaptureSessions: limit => ipcRenderer.invoke('koko:capture-sessions-list', limit ?? 100),
+  listCaptureSessions: (limit, offset) => ipcRenderer.invoke('koko:capture-sessions-list', limit ?? 100, offset ?? 0),
   completeCaptureSession: (sessionId, nextStatus) => ipcRenderer.invoke('koko:capture-session-finish', sessionId, nextStatus),
   syncPhotoCloudSession: sessionId => ipcRenderer.invoke('koko:photo-cloud-sync', sessionId),
   onPhotoCloudProgress: listener => {
@@ -38,6 +38,25 @@ const bridge: Bridge = {
     ipcRenderer.on('koko:photo-cloud-progress', handler);
     return () => ipcRenderer.removeListener('koko:photo-cloud-progress', handler);
   },
+  getCameraFolderWatchStatus: () => ipcRenderer.invoke('koko:camera-folder-status'),
+  startCameraFolderWatch: () => ipcRenderer.invoke('koko:camera-folder-start'),
+  stopCameraFolderWatch: () => ipcRenderer.invoke('koko:camera-folder-stop'),
+  onCameraFolderPhotoImport: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, result: Parameters<typeof listener>[0]) => listener(result);
+    ipcRenderer.on('koko:camera-folder-photo-import', handler);
+    return () => ipcRenderer.removeListener('koko:camera-folder-photo-import', handler);
+  },
+  getKokoMemoryStatus: () => ipcRenderer.invoke('koko:memory-status'),
+  importKokoMemoryConfig: () => ipcRenderer.invoke('koko:memory-import-config'),
+  setKokoMemoryGalleryUrl: value => ipcRenderer.invoke('koko:memory-gallery-url', value),
+  clearKokoMemoryConnection: () => ipcRenderer.invoke('koko:memory-clear'),
+  syncKokoMemorySession: sessionId => ipcRenderer.invoke('koko:memory-sync-session', sessionId),
+  getKokoMemorySessionStatus: sessionId => ipcRenderer.invoke('koko:memory-session-status', sessionId),
+  listPrintPrinters: () => ipcRenderer.invoke('koko:print-printers'),
+  listPrintJobs: () => ipcRenderer.invoke('koko:print-jobs'),
+  submitPrintImage: (pngBytes, options) => ipcRenderer.invoke('koko:print-submit', pngBytes, options),
+  cancelPrintJob: jobId => ipcRenderer.invoke('koko:print-cancel', jobId),
+  retryPrintJob: jobId => ipcRenderer.invoke('koko:print-retry', jobId),
   getPhotoCloudShareUrl: sessionId => ipcRenderer.invoke('koko:photo-cloud-link', sessionId),
   getPhotoCloudShareStatus: sessionId => ipcRenderer.invoke('koko:photo-cloud-status', sessionId),
   revokePhotoCloudShare: sessionId => ipcRenderer.invoke('koko:photo-cloud-revoke', sessionId),

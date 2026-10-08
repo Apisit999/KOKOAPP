@@ -9,6 +9,11 @@ type PhotoCloudRecoveryClient = {
   uploadVideoForSession?(sessionId: string, videoId: string, bytes: Uint8Array): Promise<boolean>;
 };
 
+/** Retaken and explicitly cancelled rounds stay local unless an operator shares them manually. */
+export function shouldAutomaticallyUploadSession(session: Pick<CaptureSessionRecord, 'status'> | null) {
+  return Boolean(session && session.status !== 'retaken' && session.status !== 'cancelled');
+}
+
 /** Retries local photos on sessions that were captured while the cloud was unavailable. */
 export async function retryPendingPhotoCloudUploads(
   sessions: CaptureSessionRecord[],
@@ -16,12 +21,16 @@ export async function retryPendingPhotoCloudUploads(
   readPhoto: (photoId: string) => Uint8Array,
   labelForSession: (session: CaptureSessionRecord) => string,
   onFailure: (sessionId: string, mediaId: string | null, error: unknown) => void,
-  readVideo?: (videoId: string) => Uint8Array
+  readVideo?: (videoId: string) => Uint8Array,
+  isStillEligible: (session: CaptureSessionRecord) => boolean = shouldAutomaticallyUploadSession
 ) {
   let uploadedCount = 0;
   let uploadedVideoCount = 0;
   let failedCount = 0;
   for (const session of sessions) {
+    // Retaken and cancelled rounds remain in the local archive, but should not be
+    // published automatically after a restart.
+    if (!shouldAutomaticallyUploadSession(session) || !isStillEligible(session)) continue;
     const photoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
     const videoIds = session.videoIds ?? [];
     if (!photoIds.length && !videoIds.length) continue;
@@ -32,8 +41,10 @@ export async function retryPendingPhotoCloudUploads(
       onFailure(session.id, null, error);
       continue;
     }
+    if (!isStillEligible(session)) continue;
     const uploaded = new Set(client.getUploadedPhotoIds(session.id));
     for (const photoId of photoIds) {
+      if (!isStillEligible(session)) break;
       if (uploaded.has(photoId)) continue;
       try {
         const bytes = readPhoto(photoId);
@@ -46,6 +57,7 @@ export async function retryPendingPhotoCloudUploads(
     }
     const uploadedVideos = new Set(client.getUploadedVideoIds?.(session.id) ?? []);
     for (const videoId of videoIds) {
+      if (!isStillEligible(session)) break;
       if (uploadedVideos.has(videoId)) continue;
       try {
         if (!client.uploadVideoForSession) throw new Error('Video cloud upload is not available');

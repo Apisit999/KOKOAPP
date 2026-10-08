@@ -13,6 +13,7 @@ export type PhotoRecord = {
   sha256: string;
   savedAt: string;
   eventId?: string;
+  importSourceKey?: string;
 };
 export type PhotoStorageStatus = { configured: boolean; directoryName: string | null; photoCount: number; pendingRecovery: number; needsAttention: boolean };
 export type PhotoRecoveryIssue = { kind: 'orphan-photo' | 'incomplete-write' | 'index-temp' | 'missing-photo' | 'invalid-index' | 'storage-unavailable'; id: string | null; token?: string };
@@ -35,6 +36,7 @@ function isPhotoRecord(value: unknown): value is PhotoRecord {
     && Number.isSafeInteger(photo.height) && (photo.height as number) > 0
     && typeof photo.sha256 === 'string' && /^[0-9a-f]{64}$/.test(photo.sha256)
     && (photo.eventId === undefined || (typeof photo.eventId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(photo.eventId)))
+    && (photo.importSourceKey === undefined || (typeof photo.importSourceKey === 'string' && /^[0-9a-f]{64}$/.test(photo.importSourceKey)))
     && typeof photo.savedAt === 'string' && Number.isFinite(Date.parse(photo.savedAt));
 }
 function isPhotoIndex(value: unknown): value is PhotoIndex {
@@ -74,6 +76,14 @@ export class PhotoStore {
   saveJpeg(bytes: Uint8Array, width: number, height: number, eventId?: string | null): Promise<PhotoRecord> {
     if (eventId !== undefined && eventId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) throw new Error('Invalid event ID');
     const task = this.writeQueue.then(() => this.saveJpegSerial(bytes, width, height, eventId));
+    this.writeQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  saveJpegFromSource(bytes: Uint8Array, width: number, height: number, eventId: string | null, importSourceKey: string): Promise<PhotoRecord> {
+    if (!/^[0-9a-f]{64}$/.test(importSourceKey)) throw new Error('Invalid camera import identity');
+    if (eventId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) throw new Error('Invalid event ID');
+    const task = this.writeQueue.then(() => this.saveJpegSerial(bytes, width, height, eventId, importSourceKey));
     this.writeQueue = task.then(() => undefined, () => undefined);
     return task;
   }
@@ -270,9 +280,13 @@ export class PhotoStore {
     }
   }
 
-  private async saveJpegSerial(bytes: Uint8Array, width: number, height: number, eventId?: string | null): Promise<PhotoRecord> {
+  private async saveJpegSerial(bytes: Uint8Array, width: number, height: number, eventId?: string | null, importSourceKey?: string): Promise<PhotoRecord> {
     this.assertPhotoDirectory();
     const index = this.readIndex();
+    if (importSourceKey) {
+      const existing = index.photos.find(photo => photo.importSourceKey === importSourceKey);
+      if (existing) return existing;
+    }
     const id = randomUUID();
     const fileName = id + '.jpg';
     const finalPath = path.join(this.photosDirectory, fileName);
@@ -289,7 +303,7 @@ export class PhotoStore {
       const record: PhotoRecord = {
         id, fileName, mimeType: 'image/jpeg', byteLength: bytes.byteLength, width, height,
         sha256: createHash('sha256').update(bytes).digest('hex'), savedAt: new Date().toISOString(),
-        ...(eventId ? { eventId } : {})
+        ...(eventId ? { eventId } : {}), ...(importSourceKey ? { importSourceKey } : {})
       };
       this.writeIndex({ schemaVersion: 1, photos: [...index.photos, record] });
       return record;

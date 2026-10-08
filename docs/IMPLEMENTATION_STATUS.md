@@ -12,6 +12,7 @@ Deliver a rentable Photobooth desktop application that captures photos and short
 
 - Electron desktop shell, Thai/English settings, device licensing, local event and capture-session records.
 - Web camera preview, still-frame capture, local JPEG storage, and short WebM recording.
+- Optional camera export-folder monitoring: stable JPEGs are validated and copied into the local library, assigned to the active event, deduplicated across restarts, and source files are left untouched.
 - Custom transparent PNG overlays for photo compositions and guest video; video output adapts to the frame ratio.
 - Local photo template composition and print dialog.
 - Private cloud folder credentials, JPEG upload, public share page protected by the share key, local retry for interrupted photo uploads.
@@ -29,6 +30,11 @@ Deliver a rentable Photobooth desktop application that captures photos and short
 - License plans now carry per-license photo retention and aggregate storage quota policies. New cloud albums bind to the verified license, expiry is fixed from that license plan at album creation, and photo/video uploads share the license quota across albums. Admins can update plan policy through a token-protected, audited server endpoint.
 - The operator dashboard now includes a live event readiness checklist for the active event, camera, local storage, KOKO template, license-backed album/QR delivery, plus optional guest display and print setup shortcuts.
 - Retrying a session upload now streams per-file progress to the Sessions page, showing checked media and successful uploads as they happen.
+- Capture-session history is no longer silently truncated at 2,000 rounds; the operator can page through history and older sessions are retrievable by ID for sharing and recovery.
+- Startup and retry recovery now recheck operator status and will not publish a cancelled or retaken session, including when a retake occurs while an upload is queued.
+- Saved photo/video templates can be exported as a versioned portable JSON archive and imported with strict schema, embedded-image, layer, geometry, duplicate-ID, and size validation. Imports merge by template ID and preserve unrelated saved templates.
+- The desktop app can import the existing KOKOMEMORY uploader JSON for one booking album, encrypt the credential with Windows safeStorage, optionally store the matching customer gallery URL, and queue JPEG uploads only after a capture session is confirmed. Upload jobs snapshot their booking/album destination, recover interrupted jobs at startup, retry transient failures, and never expose the uploader token to the renderer.
+- Print setup now discovers Windows printers and sends composed PNGs through a durable local print queue with printer, A4/A5/Letter/4×6 paper, orientation, and copies options. It records when Windows accepts a print request, recovers jobs interrupted before submission, permits retry after failures, and lets operators cancel queued jobs before they enter the spooler.
 
 ## Work completed in this increment
 
@@ -45,30 +51,31 @@ Deliver a rentable Photobooth desktop application that captures photos and short
 - Matched the live camera preview composition bounds and video overlays to the aspect ratio and crop used by saved recordings.
 - Added opt-in microphone audio for recorded clips, including framed clips, with explicit permission prompting and track cleanup.
 - Added focused server, client, recovery, and QR checks.
+- Added an opt-in camera export-folder watcher with a renderer-safe IPC contract, persistent resume setting, asynchronous file scanning, stable-file detection, bounded JPEG validation, and source-key idempotency in the photo index.
+- Added regression coverage for import stability, unchanged source files, restart deduplication, crash-window idempotency, and invalid/non-JPEG files.
+- Fixed capture-history pagination and cloud-recovery lookup so older pending sessions remain reachable without silently dropping local history.
+- Added regression checks for retake/cancel safety during recovery and for retaining history beyond 2,000 sessions.
+- Added portable template archive import/export in the desktop app, with three archive validation/merge checks.
+- Added a KOKOMEMORY desktop client for the website's existing init/signed-storage-upload/confirm contract, a durable per-album queue, encrypted credential storage, safe uploader-file import, retry recovery, and session/Settings controls. This implementation was aligned to a read-only review of the KOKOMEMORY source contract; the website repository was not modified.
+- Added Windows printer discovery and an application-managed durable print queue with composition preview, paper/orientation/copies options, retry for failed jobs, cancel for pending jobs, and status persistence after restart.
 
 ## Verification and limits
 
-- `npm.cmd run typecheck` passed after these changes.
-- `npm.cmd run test:license-server` (10 tests) and `npm.cmd run test:photo-cloud` (5 tests) passed. Album expiry test confirms the public link is denied and stored WebM is removed.
-- `npm.cmd run test:template-layout` (3 tests) and `npm.cmd run test:capture-sessions` (4 tests) passed; saved capture sessions preserve photo layout settings and normalized video geometry maps correctly to output pixels.
-- `npm.cmd run test:template-layers` (3 tests) checks safe text/sticker layers, wrapping, and normalized canvas drawing.
-- `npm.cmd run test:template-layout` (3 tests), `npm.cmd run test:capture-sessions` (4 tests), and `npm.cmd run test:template-layers` (3 tests) passed after the preview composition change.
-- `npm.cmd run test:camera` (5 tests) and `npm.cmd run test:capture-sessions` (4 tests) passed after adding optional microphone audio.
-- QR generation is covered by `npm.cmd run test:qr`.
-- Latest continuation checks: `npm.cmd run typecheck` passed; `npm.cmd run test:license-server` passed (11 tests), including plan retention updates and aggregate quota enforcement across albums with isolation between licenses; `npm.cmd run test:photo-cloud` passed (5 tests).
-- Windows x64 installer 0.1.16 is staged under `artifacts/releases/0.1.16/` with SHA-256 checksums. It includes album expiry/revocation, adjustable photo/video frames, editable text and PNG sticker layers, portrait-video sizing, aspect-matched live preview, and optional microphone audio.
-- The new guest display has not yet been exercised with a physical second monitor, and the web album has not yet been scanned from a target phone in this environment.
-- Webcam recording uses Chromium's WebM output; microphone audio is optional and depends on the device and browser permission. DSLR shutter control is not implemented.
-- Stickers are currently limited to PNG assets up to 100 KB and four per photo/video format; multi-file bundle import and shared team template libraries are not implemented.
-- The online album currently uses one unlisted secret URL per capture session. PIN login, tenant-specific quotas, and multi-tenant administrator UI are still required before selling a managed cloud service. Retention is currently a server-wide setting.
-- Windows packaging exists, but the installer is unsigned. Signed auto-update is not implemented; customers will need to install a downloaded update manually. macOS packaging is not implemented.
+- `npm.cmd run typecheck` passed; all 20 automated suites passed (83 checks), including capture recovery, photo storage, template archive validation, camera-folder import/idempotency, mocked KOKOMEMORY integration, and print-queue recovery.
+- `npm.cmd run make` produced the Windows x64 setup executable and full Squirrel package for 0.1.22. Both were staged under `artifacts/releases/0.1.22/`; all SHA-256 checksums match. Authenticode reports the installer as `NotSigned`.
+- The packaged Electron renderer harness passed 14 Thai/English page and viewport checks with no renderer or asset errors, no horizontal overflow, and reduced-motion transition set to 0s. It uses a test profile without an activated license, so licensed feature controls, including printer setup and camera-folder controls, were not exercised in that UI run.
+- The camera-folder service test imports from a temporary folder into the durable photo store, preserves the source file, and tests restart/crash-window deduplication. Real camera export software and JPEG samples still need a field test; direct DSLR shutter control is not implemented.
+- The print queue status `submitted` means Windows accepted the request; it cannot confirm that paper physically came out. Paper sizing, borderless modes, color output, printer selection, and offline/printer-driver behavior still need checks against the supported printer matrix.
+- KOKOMEMORY uploads have been exercised against a mocked API contract only. A real booking uploader JSON and staging album are still needed for an end-to-end live upload check. The customer gallery QR/token is separate from the uploader JSON, so the operator must paste the exact gallery URL from the KOKOMEMORY admin page if the app needs to show or copy that link. Upload supports JPEG photos up to 25 MB; KOKOMEMORY video publishing is not implemented.
+- Remaining release work includes a signed installer, update channel and rollback, installation/upgrade/uninstall checks on a target Windows computer, and a real event rehearsal. macOS packaging is not implemented.
+- Sticker assets remain PNG-only, up to 100 KB and four per photo/video format. Multi-file template bundles and shared team libraries are not implemented. The existing cloud album still uses one secret URL per capture session and needs PIN access before production cloud rollout.
 
 ## Next implementation order
 
 1. Test guest-display connect, close, changing monitors, hot unplug, and reconnect on physical displays; verify microphone allow/deny, audio in framed/unframed clips, and microphone disconnect on the target PC.
-2. Verify installer install, upgrade, preserved user data, and uninstall behavior on a target Windows computer.
-3. Finish media delivery: confirm mixed photo/video customer gallery on a phone, QR readability at print size, recovery after network loss, and clear upload progress.
-4. Add secure guest access options (such as a PIN) before any production cloud rollout; per-license plan storage/retention controls are now implemented.
-5. Test approved print layouts, real paper dimensions, and color output; consider a shared template library for multi-device rental teams.
-6. Expand camera adapters only against named models and official vendor support; keep the webcam path available.
+2. Verify KOKOMEMORY publishing with a staging booking: import its uploader JSON, upload a confirmed JPEG session, and open/scan the customer gallery URL on a phone.
+3. Verify installer install, upgrade, preserved user data, and uninstall behavior on a target Windows computer.
+4. Confirm mixed photo/video gallery delivery on a phone, QR readability at print size, recovery after network loss, and sharing permissions.
+5. Test approved print layouts, real paper dimensions, color output, queue retry/cancellation, and camera-folder handoff with target devices; add vendor shutter control only for named, supported models.
+6. Add secure guest access options (such as a PIN) before any production cloud rollout; per-license plan storage/retention controls are now implemented.
 7. Complete deployment operations: signed installer, update channel and rollback, backups, monitoring, support diagnostics, and a real event rehearsal.

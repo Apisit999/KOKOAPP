@@ -72,3 +72,38 @@ test('retries a locally saved video after an offline capture', async () => {
   assert.deepEqual(result, { uploadedCount: 0, uploadedVideoCount: 1, failedCount: 0 });
   assert.deepEqual(calls, [['folder', sessionId], ['video', sessionId, pendingId, [0x1a, 0x45, 0xdf, 0xa3]]]);
 });
+
+test('does not publish cancelled or retaken sessions during automatic recovery', async () => {
+  const calls = [];
+  const client = {
+    getShareUrl() { return null; },
+    getUploadedPhotoIds() { return []; },
+    async createForSession(...args) { calls.push(['folder', ...args]); return 'https://photos.test/share#private'; },
+    async uploadForSession(...args) { calls.push(['photo', ...args]); return true; }
+  };
+  const sessions = ['cancelled', 'retaken'].map(status => ({
+    id: sessionId, photoIds: [pendingId], eventId: null, template: null, status,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  }));
+
+  const result = await retryPendingPhotoCloudUploads(sessions, client, () => Uint8Array.from([1]), () => 'Retired session', () => undefined);
+
+  assert.deepEqual(result, { uploadedCount: 0, failedCount: 0 });
+  assert.deepEqual(calls, []);
+});
+
+test('stops retrying a session when an operator retakes it while uploads are queued', async () => {
+  const uploaded = [];
+  let stillEligible = true;
+  const client = {
+    getShareUrl() { return 'https://photos.test/share#private'; },
+    getUploadedPhotoIds() { return []; },
+    async uploadForSession(_sessionId, id) { uploaded.push(id); stillEligible = false; return true; }
+  };
+  const session = { id: sessionId, photoIds: [pendingId, brokenId], eventId: null, template: null, status: 'review', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+
+  const result = await retryPendingPhotoCloudUploads([session], client, () => Uint8Array.from([1]), () => 'Session', () => undefined, undefined, () => stillEligible);
+
+  assert.deepEqual(result, { uploadedCount: 1, failedCount: 0 });
+  assert.deepEqual(uploaded, [pendingId]);
+});

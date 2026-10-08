@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { CaptureSessionRecord, CaptureTemplateSnapshot } from '../../shared/contract';
@@ -101,7 +101,7 @@ export class CaptureSessionStore {
     const item: CaptureSessionRecord = { id: randomUUID(), eventId, template, photoIds: [], videoIds: [], status: 'capturing', createdAt: now, updatedAt: now };
     const index = this.read();
     index.sessions.unshift(item);
-    this.write({ schemaVersion: 1, sessions: index.sessions.slice(0, 2000) });
+    this.write(index);
     return item;
   }
 
@@ -166,9 +166,23 @@ export class CaptureSessionStore {
     return item;
   }
 
-  list(limit = 100): CaptureSessionRecord[] {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid capture session page');
-    return this.read().sessions.slice(0, limit);
+  list(limit = 100, offset = 0): CaptureSessionRecord[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200
+      || !Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000) throw new Error('Invalid capture session page');
+    return this.read().sessions.slice(offset, offset + limit);
+  }
+
+  get(sessionId: string): CaptureSessionRecord | null {
+    if (!UUID.test(sessionId)) return null;
+    return this.read().sessions.find(item => item.id === sessionId) ?? null;
+  }
+
+  /** Returns media-bearing sessions whose local files may still need cloud delivery. */
+  listForCloudRecovery(): CaptureSessionRecord[] {
+    return this.read().sessions.filter(item =>
+      item.status !== 'cancelled' && item.status !== 'retaken'
+      && (item.photoIds.length > 0 || Boolean(item.compositionPhotoId) || (item.videoIds?.length ?? 0) > 0)
+    );
   }
 
   private recoverInterrupted() {
@@ -193,7 +207,9 @@ export class CaptureSessionStore {
   private write(index: SessionIndex) {
     mkdirSync(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify(index), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    const descriptor = openSync(temporary, 'wx', 0o600);
+    try { writeFileSync(descriptor, JSON.stringify(index), 'utf8'); fsyncSync(descriptor); }
+    finally { closeSync(descriptor); }
     renameSync(temporary, this.file);
   }
 }

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen, session, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, renameSync, unlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, renameSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -14,7 +14,12 @@ import { CaptureAuthorizationRegistry } from './services/capture-authorization';
 import { CaptureSessionStore, validateCaptureTemplate } from './services/capture-session-store';
 import { LICENSE_API_BASE_URL, LICENSE_PRODUCT_ID, LICENSE_TRUSTED_KEYS, PHOTO_CLOUD_PUBLIC_BASE_URL } from './license-config';
 import { PhotoCloudClient } from './services/photo-cloud-client';
-import { retryPendingPhotoCloudUploads } from './services/photo-cloud-recovery';
+import { retryPendingPhotoCloudUploads, shouldAutomaticallyUploadSession } from './services/photo-cloud-recovery';
+import { PhotoFolderWatcher } from './services/photo-folder-watcher';
+import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
+import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
+import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
+import { PrintQueueStore, type PrintJob, type PrintOptionsSnapshot } from './services/print-queue';
 
 function handleSquirrelEvent(): boolean {
   if (process.platform !== 'win32') return false;
@@ -51,9 +56,13 @@ if (hasSingleInstanceLock) {
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const photoStorageConfigFile = () => path.join(dataDir(), 'photo-storage.json');
+const cameraFolderConfigFile = () => path.join(dataDir(), 'camera-folder.json');
 const photoStores = new Map<string, PhotoStore>();
 const videoStores = new Map<string, VideoStore>();
 const captureAuthorizations = new CaptureAuthorizationRegistry();
+let cameraFolderWatcher: PhotoFolderWatcher | null = null;
+let cameraFolderConfig: { folderPath: string | null; enabled: boolean } = { folderPath: null, enabled: false };
+let cameraFolderRestoreError: string | null = null;
 let eventStore: EventStore | null = null;
 function events() { if (!eventStore) eventStore = new EventStore(dataDir()); return eventStore; }
 let captureSessionStore: CaptureSessionStore | null = null;
@@ -66,13 +75,119 @@ function licenses() {
   return licenseRuntime;
 }
 let photoCloudClient: PhotoCloudClient | null = null;
+let kokoMemoryConnections: KokoMemoryConnectionStore | null = null;
+let kokoMemoryQueue: KokoMemorySyncStore | null = null;
+let kokoMemoryClient: KokoMemoryApiClient | null = null;
+let kokoMemoryDrainRunning = false;
+let printQueueStore: PrintQueueStore | null = null;
+const activePrintWindows = new Map<string, BrowserWindow>();
+let printQueueRunning = false;
+function memoryConnections() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is unavailable on this device.');
+  if (!kokoMemoryConnections) kokoMemoryConnections = new KokoMemoryConnectionStore(dataDir(), {
+    encrypt: value => safeStorage.encryptString(value).toString('base64'),
+    decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64'))
+  });
+  return kokoMemoryConnections;
+}
+function memoryQueue() { if (!kokoMemoryQueue) kokoMemoryQueue = new KokoMemorySyncStore(dataDir()); return kokoMemoryQueue; }
+function printQueue() { if (!printQueueStore) printQueueStore = new PrintQueueStore(dataDir()); return printQueueStore; }
+function submitPrintJob(job: PrintJob) {
+  if (job.status !== 'pending' || printQueueRunning || activePrintWindows.has(job.id)) return;
+  printQueueRunning = true;
+  let hidden: BrowserWindow | null = null;
+  try {
+    const queue = printQueue();
+    const pngPath = queue.imagePath(job);
+    const directory = path.dirname(pngPath);
+    const htmlPath = path.join(directory, `${job.id}.html`);
+    const pageSize = job.options.paper === '4x6' ? (job.options.landscape ? '6in 4in' : '4in 6in') : job.options.paper;
+    const markup = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file:"><style>@page{size:${pageSize};margin:0}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{display:flex;align-items:center;justify-content:center}img{display:block;max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}</style></head><body><img src="${job.fileName}" alt="KOKO Studio print"></body></html>`;
+    writeFileSync(htmlPath, markup, { encoding: 'utf8', mode: 0o600 });
+    const printWindow = new BrowserWindow({ parent: mainWindow ?? undefined, show: false, width: 800, height: 1000, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+    hidden = printWindow;
+    activePrintWindows.set(job.id, printWindow);
+    const current = queue.update(job.id, 'printing');
+    void printWindow.loadFile(htmlPath).then(async () => {
+      if (printWindow.isDestroyed()) return;
+      const ready = await printWindow.webContents.executeJavaScript('document.images[0].decode().then(() => true).catch(() => false)');
+      if (!ready) throw new Error('Print preview image could not be loaded.');
+      const size = current.options.paper === '4x6' ? (current.options.landscape ? { width: 152400, height: 101600 } : { width: 101600, height: 152400 }) : current.options.paper;
+      printWindow.webContents.print({
+        silent: Boolean(current.options.printerName), printBackground: true, deviceName: current.options.printerName || undefined,
+        landscape: current.options.landscape, copies: current.options.copies, pageSize: size, margins: { marginType: 'none' }
+      }, (success, failureReason) => {
+        try { queue.update(current.id, success ? 'submitted' : 'failed', success ? null : `Print request failed or was cancelled${failureReason ? `: ${failureReason}` : ''}.`); }
+        catch (error) { log('print-job-status-failed', error, { jobId: current.id }); }
+        if (hidden && !hidden.isDestroyed()) hidden.close();
+        printQueueRunning = false;
+        drainPrintQueue();
+      });
+    }).catch(error => {
+      try { queue.update(job.id, 'failed', error instanceof Error ? error.message : 'Could not start print job.'); } catch { /* Preserve the original print failure. */ }
+      log('print-job-failed', error, { jobId: job.id });
+      if (hidden && !hidden.isDestroyed()) hidden.close();
+      printQueueRunning = false;
+      drainPrintQueue();
+    }).finally(() => { activePrintWindows.delete(job.id); });
+    hidden.on('closed', () => { activePrintWindows.delete(job.id); });
+  } catch (error) {
+    try { printQueue().update(job.id, 'failed', error instanceof Error ? error.message : 'Could not start print job.'); } catch { /* Preserve queue failure. */ }
+    log('print-job-failed', error, { jobId: job.id });
+    if (hidden && !hidden.isDestroyed()) hidden.close();
+    printQueueRunning = false;
+    setTimeout(drainPrintQueue, 100);
+  }
+}
+function drainPrintQueue() {
+  if (printQueueRunning) return;
+  try {
+    const next = printQueue().list().reverse().find(job => job.status === 'pending');
+    if (next) submitPrintJob(next);
+  } catch (error) { log('print-queue-drain-failed', error); }
+}
+async function drainKokoMemoryQueue(sessionId?: string) {
+  if (kokoMemoryDrainRunning || !safeStorage.isEncryptionAvailable()) return;
+  const root = configuredPhotoRoot();
+  if (!root) return;
+  kokoMemoryDrainRunning = true;
+  try {
+    const queue = memoryQueue();
+    if (!kokoMemoryClient) kokoMemoryClient = new KokoMemoryApiClient();
+    for (const job of queue.dueJobs()) {
+      if (sessionId && job.sessionId !== sessionId) continue;
+      const sessionRecord = captureSessions().get(job.sessionId);
+      if (!sessionRecord || sessionRecord.status !== 'confirmed' || !sessionRecord.photoIds.includes(job.photoId) && sessionRecord.compositionPhotoId !== job.photoId) {
+        queue.markFailed(job.id, 'Capture session is no longer confirmed; upload was stopped.', false);
+        continue;
+      }
+      const connection = memoryConnections().getById(job.connectionId);
+      if (!connection || connection.bookingId !== job.bookingId || connection.shareId !== job.shareId) {
+        queue.markFailed(job.id, 'The original KOKOMEMORY destination is unavailable; import its uploader configuration again.', false);
+        continue;
+      }
+      queue.markUploading(job.id);
+      try {
+        const stored = getPhotoStore(root).readPhoto(job.photoId);
+        await kokoMemoryClient.uploadPhoto(connection, { sessionId: job.sessionId, photoId: job.photoId, fileName: stored.photo.fileName, mimeType: 'image/jpeg', bytes: stored.bytes });
+        queue.markUploaded(job.id);
+        log('kokomemory-photo-uploaded', undefined, { sessionId: job.sessionId, bookingId: job.bookingId, photoId: job.photoId });
+      } catch (error) {
+        const retryable = error instanceof KokoMemoryApiError ? error.retryable : false;
+        const safeMessage = error instanceof KokoMemoryApiError ? error.message : 'Could not read or upload the local photo.';
+        queue.markFailed(job.id, safeMessage, retryable);
+        log('kokomemory-photo-upload-failed', error, { sessionId: job.sessionId, bookingId: job.bookingId, photoId: job.photoId });
+      }
+    }
+  } finally { kokoMemoryDrainRunning = false; }
+}
 function photoCloud() {
   if (!photoCloudClient) photoCloudClient = new PhotoCloudClient(dataDir(), licenses(), PHOTO_CLOUD_PUBLIC_BASE_URL);
   return photoCloudClient;
 }
 async function uploadCaptureSessionToCloud(sessionId: string) {
-  const session = captureSessions().list(200).find(item => item.id === sessionId);
-  if (!session) return;
+  const session = captureSessions().get(sessionId);
+  if (!session || !shouldAutomaticallyUploadSession(session)) return;
   const root = configuredPhotoRoot();
   if (!root) return;
   let shareUrl = photoCloud().getShareUrl(session.id);
@@ -82,10 +197,12 @@ async function uploadCaptureSessionToCloud(sessionId: string) {
   }
   const photoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
   for (const photoId of photoIds) {
+    if (!shouldAutomaticallyUploadSession(captureSessions().get(sessionId))) return;
     const photo = getPhotoStore(root).readPhoto(photoId);
     await photoCloud().uploadForSession(session.id, photoId, photo.bytes);
   }
   for (const videoId of session.videoIds ?? []) {
+    if (!shouldAutomaticallyUploadSession(captureSessions().get(sessionId))) return;
     const video = getVideoStore(root).read(videoId);
     await photoCloud().uploadVideoForSession(session.id, videoId, video.bytes);
   }
@@ -115,7 +232,7 @@ function recoverPendingPhotoCloudUploads() {
   const root = configuredPhotoRoot();
   if (!root) return;
   try {
-    const sessions = captureSessions().list(200).filter(item => item.photoIds.length > 0 || item.compositionPhotoId || (item.videoIds?.length ?? 0) > 0).slice(0, 10);
+    const sessions = captureSessions().listForCloudRecovery();
     if (!sessions.length) return;
     void retryPendingPhotoCloudUploads(
       sessions,
@@ -126,7 +243,8 @@ function recoverPendingPhotoCloudUploads() {
         return eventName || `Photo session ${new Date(item.createdAt).toLocaleString('en-GB')}`;
       },
       (sessionId, mediaId, error) => log('photo-cloud-recovery-failed', error, { sessionId, ...(mediaId ? { mediaId } : {}) }),
-      videoId => getVideoStore(root).read(videoId).bytes
+      videoId => getVideoStore(root).read(videoId).bytes,
+      session => shouldAutomaticallyUploadSession(captureSessions().get(session.id))
     ).then(result => {
       if (result.uploadedCount || result.uploadedVideoCount) log('photo-cloud-recovery-succeeded', undefined, result);
     }).catch(error => log('photo-cloud-recovery-failed', error));
@@ -135,6 +253,61 @@ function recoverPendingPhotoCloudUploads() {
 function photoStorageStatus() {
   const root = configuredPhotoRoot();
   return getPhotoStore(root ?? dataDir()).getStatus(root !== null);
+}
+function readCameraFolderConfig() {
+  try {
+    const value: unknown = JSON.parse(readFileSync(cameraFolderConfigFile(), 'utf8'));
+    if (!value || typeof value !== 'object') return { folderPath: null, enabled: false };
+    const config = value as Record<string, unknown>;
+    if (config.version !== 1 || (config.folderPath !== null && (typeof config.folderPath !== 'string' || !path.isAbsolute(config.folderPath))) || typeof config.enabled !== 'boolean') return { folderPath: null, enabled: false };
+    return { folderPath: config.folderPath as string | null, enabled: config.enabled };
+  } catch { return { folderPath: null, enabled: false }; }
+}
+function writeCameraFolderConfig(folderPath: string | null, enabled: boolean) {
+  mkdirSync(dataDir(), { recursive: true });
+  const temporary = `${cameraFolderConfigFile()}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ version: 1, folderPath, enabled }), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  renameSync(temporary, cameraFolderConfigFile());
+  cameraFolderConfig = { folderPath, enabled };
+}
+function cameraFolderStatus() {
+  cameraFolderConfig = readCameraFolderConfig();
+  return cameraFolderWatcher?.status() ?? { enabled: false, folderPath: cameraFolderConfig.folderPath, importedCount: 0, lastError: cameraFolderRestoreError };
+}
+function pathsOverlap(left: string, right: string) {
+  const a = path.resolve(left); const b = path.resolve(right);
+  const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  const relative = (base: string, target: string) => normalize(path.relative(base, target));
+  const within = (base: string, target: string) => { const value = relative(base, target); return value === '' || (value !== '..' && !value.startsWith(`..${path.sep}`) && !path.isAbsolute(value)); };
+  return within(a, b) || within(b, a);
+}
+function startCameraFolderWatcher(folderPath: string) {
+  const storageRoot = configuredPhotoRoot();
+  if (!storageRoot) throw new Error('Choose the local photo storage folder first.');
+  const source = realpathSync(folderPath);
+  const storage = realpathSync(storageRoot);
+  if (pathsOverlap(source, storage)) throw new Error('Camera folder and photo storage must be separate folders.');
+  const previousWatcher = cameraFolderWatcher;
+  const nextWatcher = new PhotoFolderWatcher(dataDir(), async (bytes, sourceKey) => {
+    if (bytes.byteLength < 4 || bytes.byteLength > 100 * 1024 * 1024 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) throw new Error('Only complete JPEG photos up to 100 MB can be imported.');
+    const dimensions = jpegDimensions(Buffer.from(bytes));
+    const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
+    const size = decoded.getSize();
+    if (decoded.isEmpty() || size.width !== dimensions.width || size.height !== dimensions.height) throw new Error('Camera file is not a valid JPEG image.');
+    const activeEvent = events().active();
+    return getPhotoStore(storageRoot).saveJpegFromSource(bytes, dimensions.width, dimensions.height, activeEvent?.id ?? null, sourceKey);
+  }, (fileName, photo) => {
+    mainWindow?.webContents.send('koko:camera-folder-photo-import', { fileName, photo });
+    log('camera-folder-photo-imported', undefined, { byteLength: photo.byteLength, width: photo.width, height: photo.height });
+  });
+  try {
+    const status = nextWatcher.start(source);
+    writeCameraFolderConfig(source, true);
+    previousWatcher?.stop();
+    cameraFolderWatcher = nextWatcher;
+    cameraFolderRestoreError = null;
+    return status;
+  } catch (error) { nextWatcher.stop(); throw error; }
 }
 function log(event: string, error?: unknown, details: Record<string, string | number | boolean> = {}) {
   try {
@@ -298,6 +471,57 @@ app.on('ready', () => {
     return permission === 'media' && videoOnly && trustedMediaRequest(webContents, details.requestingUrl ?? requestingOrigin, details.isMainFrame);
   });
   ipcMain.handle('koko:status', event => { trusted(event); return status(); });
+  ipcMain.handle('koko:print-printers', async event => {
+    trusted(event);
+    if (!mainWindow) return [];
+    const printers = await mainWindow.webContents.getPrintersAsync();
+    return printers.map(printer => ({ name: printer.name, displayName: printer.displayName, description: printer.description }));
+  });
+  ipcMain.handle('koko:print-jobs', event => { trusted(event); drainPrintQueue(); return printQueue().list(); });
+  ipcMain.handle('koko:print-submit', (event, value: unknown, options: unknown) => {
+    trusted(event);
+    if (!(value instanceof Uint8Array) || value.byteLength > 30 * 1024 * 1024 || !options || typeof options !== 'object') throw new Error('Invalid print request.');
+    const image = nativeImage.createFromBuffer(Buffer.from(value));
+    const size = image.getSize();
+    if (image.isEmpty() || size.width < 1 || size.height < 1 || size.width > 12_000 || size.height > 12_000 || size.width * size.height > 100_000_000) throw new Error('Print image could not be decoded or is too large.');
+    const input = options as Record<string, unknown>;
+    const printerName = typeof input.printerName === 'string' ? input.printerName : '';
+    const snapshot: PrintOptionsSnapshot = {
+      printerName, paper: input.paper as PrintOptionsSnapshot['paper'], landscape: input.landscape as boolean, copies: input.copies as number
+    };
+    if (printerName) {
+      if (!mainWindow) throw new Error('Printer list is unavailable.');
+      return mainWindow.webContents.getPrintersAsync().then(printers => {
+        if (!printers.some(printer => printer.name === printerName)) throw new Error('Selected printer is not currently available.');
+        const job = printQueue().enqueue(value, snapshot);
+        setTimeout(drainPrintQueue, 150);
+        log('print-job-queued', undefined, { jobId: job.id, printerName, copies: snapshot.copies, paper: snapshot.paper });
+        return job;
+      });
+    }
+    const job = printQueue().enqueue(value, snapshot);
+    setTimeout(drainPrintQueue, 150);
+    log('print-job-queued', undefined, { jobId: job.id, printerName: '', copies: snapshot.copies, paper: snapshot.paper });
+    return job;
+  });
+  ipcMain.handle('koko:print-cancel', (event, id: unknown) => {
+    trusted(event);
+    if (typeof id !== 'string') throw new Error('Invalid print job ID.');
+    const job = printQueue().get(id);
+    if (!job || job.status !== 'pending') return job;
+    const updated = printQueue().update(id, 'cancelled');
+    log('print-job-cancelled', undefined, { jobId: id });
+    return updated;
+  });
+  ipcMain.handle('koko:print-retry', (event, id: unknown) => {
+    trusted(event);
+    if (typeof id !== 'string') throw new Error('Invalid print job ID.');
+    const job = printQueue().get(id);
+    if (!job || job.status !== 'failed') return job;
+    const updated = printQueue().update(id, 'pending');
+    setTimeout(drainPrintQueue, 150);
+    return updated;
+  });
   ipcMain.handle('koko:settings', (event, value: unknown) => {
     trusted(event);
     if (!validSettings(value)) throw new Error('Invalid settings');
@@ -345,6 +569,23 @@ app.on('ready', () => {
     if (bounds.x === display.bounds.x && bounds.y === display.bounds.y) guestDisplayWindow.close();
   });
   ipcMain.handle('koko:photo-storage-status', event => { trusted(event); return photoStorageStatus(); });
+  ipcMain.handle('koko:camera-folder-status', event => { trusted(event); return cameraFolderStatus(); });
+  ipcMain.handle('koko:camera-folder-start', async event => {
+    trusted(event);
+    if (!mainWindow) throw new Error('Window is unavailable');
+    const choice = await dialog.showOpenDialog(mainWindow, { title: 'Choose camera export folder', properties: ['openDirectory'] });
+    if (choice.canceled || !choice.filePaths[0]) return cameraFolderStatus();
+    return startCameraFolderWatcher(choice.filePaths[0]);
+  });
+  ipcMain.handle('koko:camera-folder-stop', event => {
+    trusted(event);
+    const previous = cameraFolderWatcher?.status() ?? readCameraFolderConfig();
+    const stopped = cameraFolderWatcher?.stop();
+    cameraFolderWatcher = null;
+    writeCameraFolderConfig(previous.folderPath, false);
+    cameraFolderRestoreError = stopped?.lastError ?? null;
+    return { enabled: false, folderPath: previous.folderPath, importedCount: stopped?.importedCount ?? 0, lastError: cameraFolderRestoreError };
+  });
   ipcMain.handle('koko:photo-recovery-inspect', event => {
     trusted(event);
     const root = configuredPhotoRoot();
@@ -487,20 +728,60 @@ app.on('ready', () => {
     if (cancelled && sessionId) captureSessions().cancel(sessionId);
     return cancelled;
   });
-  ipcMain.handle('koko:capture-sessions-list', (event, limit: unknown) => {
+  ipcMain.handle('koko:capture-sessions-list', (event, limit: unknown, offset: unknown) => {
     trusted(event);
-    if (!Number.isSafeInteger(limit)) throw new Error('Invalid capture session page');
-    return captureSessions().list(limit as number);
+    if (!Number.isSafeInteger(limit) || !Number.isSafeInteger(offset)) throw new Error('Invalid capture session page');
+    return captureSessions().list(limit as number, offset as number);
   });
   ipcMain.handle('koko:capture-session-finish', (event, sessionId: unknown, nextStatus: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !['review', 'confirmed', 'retaken'].includes(nextStatus as string)) throw new Error('Invalid capture session update');
     return captureSessions().finish(sessionId, nextStatus as 'review' | 'confirmed' | 'retaken');
   });
+  ipcMain.handle('koko:memory-status', event => { trusted(event); return memoryConnections().getStatus(); });
+  ipcMain.handle('koko:memory-import-config', async event => {
+    trusted(event);
+    if (!mainWindow) throw new Error('Application window is unavailable.');
+    const choice = await dialog.showOpenDialog(mainWindow, { title: 'Import KOKOMEMORY uploader configuration', properties: ['openFile'], filters: [{ name: 'Uploader configuration', extensions: ['json'] }] });
+    if (choice.canceled || !choice.filePaths[0]) return memoryConnections().getStatus();
+    const selected = choice.filePaths[0];
+    const metadata = lstatSync(selected);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 16_000) throw new Error('Select a regular uploader JSON file smaller than 16 KB.');
+    const result = memoryConnections().importUploaderConfig(readFileSync(selected, 'utf8'));
+    log('kokomemory-config-imported', undefined, { bookingId: result.bookingId ?? '', shareId: result.shareId ?? '' });
+    return result;
+  });
+  ipcMain.handle('koko:memory-gallery-url', (event, value: unknown) => {
+    trusted(event);
+    if (typeof value !== 'string' || value.length > 2_000) throw new Error('Invalid gallery URL.');
+    return memoryConnections().setActiveGalleryUrl(value);
+  });
+  ipcMain.handle('koko:memory-clear', event => { trusted(event); return memoryConnections().clearActive(); });
+  ipcMain.handle('koko:memory-session-status', (event, sessionId: unknown) => {
+    trusted(event);
+    if (typeof sessionId !== 'string') throw new Error('Invalid capture session ID.');
+    const status = memoryConnections().getStatus();
+    return memoryQueue().statusForSession(sessionId, status.connectionId);
+  });
+  ipcMain.handle('koko:memory-sync-session', async (event, sessionId: unknown) => {
+    trusted(event);
+    if (typeof sessionId !== 'string') throw new Error('Invalid capture session ID.');
+    const sessionRecord = captureSessions().get(sessionId);
+    if (!sessionRecord || sessionRecord.status !== 'confirmed') throw new Error('Confirm this capture session before uploading it to KOKOMEMORY.');
+    const connection = memoryConnections().getActive();
+    if (!connection) throw new Error('Import the uploader configuration for the intended booking first.');
+    const root = configuredPhotoRoot();
+    if (!root) throw new Error('Choose a photo storage folder before uploading.');
+    const photoIds = sessionRecord.compositionPhotoId ? [sessionRecord.compositionPhotoId] : sessionRecord.photoIds;
+    const jobs = memoryQueue();
+    jobs.enqueueSession(sessionRecord, photoIds, { connectionId: connection.id, bookingId: connection.bookingId, shareId: connection.shareId });
+    await drainKokoMemoryQueue(sessionId);
+    return jobs.statusForSession(sessionId, connection.id);
+  });
   ipcMain.handle('koko:photo-cloud-sync', async (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
-    const session = captureSessions().list(200).find(item => item.id === sessionId);
+    const session = captureSessions().get(sessionId);
     if (!session) throw new Error('Capture session not found');
     let shareUrl = photoCloud().getShareUrl(session.id);
     if (!shareUrl) {
@@ -542,19 +823,19 @@ app.on('ready', () => {
   ipcMain.handle('koko:photo-cloud-link', (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
-    if (!captureSessions().list(200).some(item => item.id === sessionId)) return null;
+    if (!captureSessions().get(sessionId)) return null;
     return photoCloud().getShareUrl(sessionId);
   });
   ipcMain.handle('koko:photo-cloud-status', (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
-    if (!captureSessions().list(200).some(item => item.id === sessionId)) return { shareUrl: null, revoked: false };
+    if (!captureSessions().get(sessionId)) return { shareUrl: null, revoked: false };
     return photoCloud().getShareStatus(sessionId);
   });
   ipcMain.handle('koko:photo-cloud-revoke', async (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
-    if (!captureSessions().list(200).some(item => item.id === sessionId)) throw new Error('Capture session not found');
+    if (!captureSessions().get(sessionId)) throw new Error('Capture session not found');
     return photoCloud().revokeShareForSession(sessionId);
   });
   ipcMain.handle('koko:choose-photo-storage', async event => {
@@ -563,6 +844,11 @@ app.on('ready', () => {
     const choice = await dialog.showOpenDialog(mainWindow, { title: 'Choose photo storage folder', properties: ['openDirectory', 'createDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return photoStorageStatus();
     const root = validateStorageRoot(choice.filePaths[0]);
+    const cameraConfig = readCameraFolderConfig();
+    if (cameraConfig.enabled && cameraConfig.folderPath && existsSync(cameraConfig.folderPath)
+      && pathsOverlap(realpathSync(cameraConfig.folderPath), realpathSync(root))) {
+      throw new Error('Stop camera folder monitoring before selecting an overlapping photo storage folder.');
+    }
     getPhotoStore(root).configure();
     mkdirSync(dataDir(), { recursive: true });
     const temporaryFile = photoStorageConfigFile() + '.' + randomUUID() + '.tmp';
@@ -610,7 +896,7 @@ app.on('ready', () => {
     trusted(event);
     if (typeof sessionIdValue !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionIdValue)) throw new Error('Invalid capture session ID');
     if (!(value instanceof Uint8Array) || value.byteLength < 4 || value.byteLength > 40 * 1024 * 1024) throw new Error('Invalid composed photo size');
-    const session = captureSessions().list(200).find(item => item.id === sessionIdValue);
+    const session = captureSessions().get(sessionIdValue);
     if (!session || session.status !== 'review' || !session.template || session.photoIds.length !== session.template.count) throw new Error('Capture session is not ready for a composed photo');
     const root = configuredPhotoRoot();
     if (!root) throw new Error('Choose a photo storage folder first');
@@ -750,8 +1036,16 @@ app.on('ready', () => {
     return removed;
   });
   createWindow();
+  cameraFolderConfig = readCameraFolderConfig();
+  if (cameraFolderConfig.enabled && cameraFolderConfig.folderPath) {
+    try { startCameraFolderWatcher(cameraFolderConfig.folderPath); }
+    catch (error) { cameraFolderRestoreError = error instanceof Error ? error.message : 'Could not restore the camera folder'; log('camera-folder-restore-failed', error); writeCameraFolderConfig(cameraFolderConfig.folderPath, false); }
+  }
   setTimeout(recoverPendingPhotoCloudUploads, 2000);
+  setTimeout(() => { try { memoryQueue(); void drainKokoMemoryQueue(); } catch (error) { log('kokomemory-queue-restore-failed', error); } }, 2500);
+  setInterval(() => { void drainKokoMemoryQueue().catch(error => log('kokomemory-queue-drain-failed', error)); }, 15_000);
 });
+app.on('before-quit', () => { cameraFolderWatcher?.stop(); });
 app.on('window-all-closed', () => app.quit());
 process.on('uncaughtException', error => { lastError = 'An application error occurred'; log('uncaught-exception', error); });
 process.on('unhandledRejection', reason => { log('unhandled-rejection', reason); });

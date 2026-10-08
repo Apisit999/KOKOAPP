@@ -11,6 +11,7 @@ fs.mkdirSync(output, { recursive: true });
 app.setPath('userData', path.join(output, 'profile'));
 const report = { screenshots: [], checks: [], rendererErrors: [], assetErrors: [] };
 let started = false;
+let stage = 'application startup';
 const pause = () => new Promise(resolve => setTimeout(resolve, 300));
 const evaluate = (win, js) => win.webContents.executeJavaScript(js);
 app.on('browser-window-created', (_event, win) => {
@@ -24,6 +25,7 @@ app.on('browser-window-created', (_event, win) => {
   });
   win.webContents.once('did-finish-load', async () => {
     try {
+      stage = 'Thai language reload';
       await changeLanguage(win, 'th');
       await evaluate(win, `Promise.all([
         document.fonts.load('400 24px "Noto Sans Thai"', 'เก็บภาพช่วงเวลาที่มีความหมาย'),
@@ -47,10 +49,12 @@ app.on('browser-window-created', (_event, win) => {
         await pause();
         await inspect(win, 'diagnostics', width, height);
       }
+      stage = 'English language reload';
       await changeLanguage(win, 'en');
       win.setContentSize(1280, 720);
       await inspect(win, 'activation-en', 1280, 720);
       for (const name of ['Gallery', 'Templates', 'Events', 'Settings', 'Print']) {
+        stage = `English ${name} page`;
         await evaluate(win, `Array.from(document.querySelectorAll('.sidebar nav button')).find(button => button.textContent.trim() === ${JSON.stringify(name)})?.click()`);
         await pause();
         await inspect(win, name.toLowerCase() + '-en', 1280, 720);
@@ -70,6 +74,7 @@ app.on('browser-window-created', (_event, win) => {
       finish(0);
     } catch (error) {
       report.failure = String(error);
+      report.failureStage = stage;
       finish(1);
     }
   });

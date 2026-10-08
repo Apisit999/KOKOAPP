@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { CaptureImageLayer, CaptureTextLayer, PhotoRecord } from '../shared/contract';
+import type { CaptureImageLayer, CaptureTextLayer, PhotoRecord, PrintJobRecord, PrintOptionsSnapshot, PrintPrinter } from '../shared/contract';
 import { defaultPhotoSlots, isValidPhotoSlot, movePhotoSlot, normalizedRectToPixels, resizePhotoSlot, type PhotoSlot } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers, MAX_STICKER_BYTES, MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-layers';
+import { exportTemplateArchive, mergeTemplateArchive, parseTemplateArchive } from './template-archive';
 
 type Template = {
   id: string;
@@ -135,16 +136,31 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [printers, setPrinters] = useState<PrintPrinter[]>([]);
+  const [printJobs, setPrintJobs] = useState<PrintJobRecord[]>([]);
+  const [printerName, setPrinterName] = useState('');
+  const [paper, setPaper] = useState<PrintOptionsSnapshot['paper']>('A4');
+  const [landscape, setLandscape] = useState(false);
+  const [copies, setCopies] = useState(1);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const slotEditorRef = useRef<HTMLDivElement>(null);
   const videoFrameEditorRef = useRef<HTMLDivElement>(null);
   const videoImageEditorRef = useRef<HTMLDivElement>(null);
+  const archiveInputRef = useRef<HTMLInputElement>(null);
   const slotDragRef = useRef<{ index: number; kind: 'photo' | 'video' | 'photo-image' | 'video-image'; mode: 'move' | 'resize'; startX: number; startY: number; startSlot: PhotoSlot } | null>(null);
   const photoSlots = useMemo(() => template.slots?.length === template.count ? template.slots : defaultPhotoSlots(template.count, template.title, template.logo, template.footer, template.showDate), [template]);
   const canvasHeight = template.count === 1 ? 1500 : template.count === 2 ? 1800 : 1600;
   const videoFrameRect = template.videoFrame ?? { x: 0, y: 0, width: 100, height: 100 };
   const available = useMemo(() => photos.filter(photo => selected.includes(photo.id)), [photos, selected]);
   const complete = available.length === template.count;
+
+  useEffect(() => {
+    if (!printEnabled) return;
+    const refresh = () => { void Promise.all([window.koko.listPrintPrinters(), window.koko.listPrintJobs()]).then(([devices, jobs]) => { setPrinters(devices); setPrintJobs(jobs.slice(0, 8)); }).catch(error => onMessage(error instanceof Error ? error.message : 'Could not read print status.')); };
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => window.clearInterval(timer);
+  }, [printEnabled]);
 
   useEffect(() => {
     let current = true;
@@ -240,6 +256,30 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     }
     try { localStorage.setItem(TEMPLATE_KEY, serialized); setSaved(next); return true; }
     catch { onMessage(th ? 'บันทึกเทมเพลตไม่สำเร็จ พื้นที่จัดเก็บในเครื่องอาจเต็ม' : 'Could not save template. Local app storage may be full.'); return false; }
+  }
+  function exportTemplates() {
+    try {
+      const blob = new Blob([exportTemplateArchive(saved)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = 'koko-templates.json'; anchor.click();
+      URL.revokeObjectURL(url);
+      onMessage(th ? 'ส่งออกเทมเพลตแล้ว' : 'Templates exported.');
+    } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not export templates.'); }
+  }
+  async function importTemplates(file?: File) {
+    if (!file) return;
+    if (file.size > 4_000_000) { onMessage(th ? 'ไฟล์เทมเพลตมีขนาดเกิน 4 MB' : 'Template archive exceeds 4 MB.'); return; }
+    try {
+      const imported = parseTemplateArchive(await file.text());
+      const next = mergeTemplateArchive(saved, imported);
+      if (next.length > 100) { onMessage(th ? 'มีเทมเพลตเกิน 100 รายการ กรุณาลบรายการที่ไม่ใช้ก่อน' : 'You can save up to 100 templates. Remove unused templates first.'); return; }
+      if (persist(next)) {
+        const active = next.find(item => item.id === activeTemplateId);
+        if (active) onUseTemplate?.(active);
+        onMessage(th ? `นำเข้าเทมเพลต ${imported.length} รายการแล้ว` : `Imported ${imported.length} template${imported.length === 1 ? '' : 's'}.`);
+      }
+    } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not import templates.'); }
   }
   function saveTemplate() {
     const name = template.name.trim();
@@ -337,13 +377,11 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     try {
       const output = document.createElement('canvas');
       await drawComposition(output, available, template, th);
-      const target = canvasRef.current;
-      const context = target?.getContext('2d');
-      if (!target || !context) throw new Error('Print preview is unavailable');
-      target.width = output.width; target.height = output.height;
-      context.drawImage(output, 0, 0);
-      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      window.print();
+      const blob = await new Promise<Blob>((resolve, reject) => output.toBlob(value => value ? resolve(value) : reject(new Error('Could not create print image.')), 'image/png'));
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const job = await window.koko.submitPrintImage(bytes, { printerName, paper, landscape, copies });
+      setPrintJobs(current => [job, ...current].slice(0, 8));
+      onMessage(th ? `เพิ่มงานพิมพ์แล้ว (${job.id.slice(0, 8)})` : `Print job queued (${job.id.slice(0, 8)}).`);
     } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not open the print dialog.'); }
     finally { setBusy(false); }
   }
@@ -354,6 +392,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     <p className="lead">{th ? 'เลือกภาพจากคลัง จัดวาง และส่งออกเป็นภาพ PNG ได้ทันที' : 'Choose photos from your library, arrange them, and export a finished PNG.'}{printEnabled ? (th ? ' หรือเปิดกล่องพิมพ์ของระบบ' : ' or open your system print dialog.') : ''}</p>
     <div className="template-layout">
       <section className="template-controls">
+        {printEnabled && <><fieldset className="print-options"><legend>{th ? 'ตัวเลือกพิมพ์' : 'Print options'}</legend><label>{th ? 'เครื่องพิมพ์' : 'Printer'}<select value={printerName} onChange={event => setPrinterName(event.target.value)}><option value="">{th ? 'เลือกในกล่องพิมพ์ของระบบ' : 'Choose in system print dialog'}</option>{printers.map(printer => <option key={printer.name} value={printer.name}>{printer.displayName || printer.name}</option>)}</select></label><label>{th ? 'กระดาษ' : 'Paper'}<select value={paper} onChange={event => setPaper(event.target.value as PrintOptionsSnapshot['paper'])}><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option><option value="4x6">4 × 6 in</option></select></label><label className="switch"><span>{th ? 'แนวนอน' : 'Landscape'}</span><input type="checkbox" checked={landscape} onChange={event => setLandscape(event.target.checked)} /></label><label>{th ? 'จำนวนสำเนา' : 'Copies'}<input type="number" min={1} max={10} value={copies} onChange={event => setCopies(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} /></label><button className="camera-secondary" type="button" onClick={() => void window.koko.listPrintPrinters().then(setPrinters).catch(error => onMessage(error instanceof Error ? error.message : 'Printer scan failed.'))}>{th ? 'ค้นหาเครื่องพิมพ์' : 'Refresh printers'}</button></fieldset><section className="print-job-list"><strong>{th ? 'คิวและประวัติพิมพ์' : 'Print queue and history'}</strong>{printJobs.length ? printJobs.map(job => <div key={job.id} className="print-job-row"><span>{job.options.printerName || (th ? 'กล่องพิมพ์ระบบ' : 'System dialog')} · {job.options.paper} · {job.options.copies}× · {job.status}{job.error ? ` · ${job.error}` : ''}</span>{job.status === 'failed' && <button type="button" className="text-link" onClick={() => void window.koko.retryPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ลองใหม่' : 'Retry'}</button>}{job.status === 'pending' && <button type="button" className="text-link" onClick={() => void window.koko.cancelPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>) : <p className="muted">{th ? 'ยังไม่มีงานพิมพ์' : 'No print jobs yet.'}</p>}<small>{th ? 'สถานะส่งแล้วหมายถึง Windows รับงานเข้าคิว ไม่ได้ยืนยันผลพิมพ์จริง' : 'Submitted means Windows accepted the job; it does not confirm paper output.'}</small></section></>}
         <label className="template-field">{th ? 'ชื่อเทมเพลต' : 'Template name'}<input value={template.name} maxLength={60} onChange={event => update('name', event.target.value)} placeholder={th ? 'เช่น งานวันเกิด' : 'e.g. Birthday'} /></label>
         <div className="template-field"><span>{th ? 'เลย์เอาต์' : 'Layout'}</span><div className="template-options">{([1, 2, 4] as const).map(count => <button type="button" key={count} className={template.count === count ? 'selected' : ''} aria-pressed={template.count === count} onClick={() => { if (template.count !== count) setTemplate(current => ({ ...current, count, overlay: '', slots: undefined })); setSelected([]); }}>{count} {th ? 'ภาพ' : count === 1 ? 'photo' : 'photos'}</button>)}</div></div>
         <label className="template-field">{th ? 'ข้อความหัวภาพ' : 'Title'}<input value={template.title} maxLength={60} onChange={event => update('title', event.target.value)} /></label>
@@ -421,7 +460,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         {!photos.length ? <div className="template-no-photos">{th ? 'ยังไม่มีภาพในคลัง ไปที่ Capture Studio เพื่อบันทึกภาพก่อน' : 'Your library is empty. Save photos to the library before making a template.'}</div> : <div className="template-photo-grid">{photos.map(photo => <button type="button" key={photo.id} className={`template-photo ${selected.includes(photo.id) ? 'selected' : ''}`} onClick={() => togglePhoto(photo.id)} aria-pressed={selected.includes(photo.id)} aria-label={`${th ? 'เลือกภาพ' : 'Select photo'} ${new Date(photo.savedAt).toLocaleDateString()}`}><PhotoImage photo={photo} /><span>{selected.includes(photo.id) ? selected.indexOf(photo.id) + 1 : '+'}</span></button>)}</div>}
       </section>
     </div>
-    <section className="saved-template-list"><h2>{th ? 'เทมเพลตที่บันทึกไว้' : 'Saved templates'}</h2>{saved.length ? saved.map(item => <div className="saved-template-row" key={item.id}><button onClick={() => loadTemplate(item.id)}>{item.name} <small>{item.count} {th ? 'ภาพ' : 'photos'}</small></button><button className="text-link" onClick={() => useForGuest(item)}>{activeTemplateId === item.id ? (th ? 'ใช้แล้ว' : 'In use') : (th ? 'ใช้กับแขก' : 'Use for guests')}</button><button className="saved-template-delete" onClick={() => removeTemplate(item.id)} aria-label={`${th ? 'ลบเทมเพลต' : 'Delete template'} ${item.name}`}>×</button></div>) : <p>{th ? 'ยังไม่มีเทมเพลตที่บันทึกไว้' : 'No saved templates yet.'}</p>}</section>
+    <section className="saved-template-list"><h2>{th ? 'เทมเพลตที่บันทึกไว้' : 'Saved templates'}</h2><div className="template-archive-actions"><button type="button" className="camera-secondary" onClick={exportTemplates} disabled={!saved.length}>{th ? 'ส่งออกเทมเพลต' : 'Export templates'}</button><button type="button" className="camera-secondary" onClick={() => archiveInputRef.current?.click()}>{th ? 'นำเข้าเทมเพลต' : 'Import templates'}</button><input ref={archiveInputRef} type="file" accept="application/json,.json" hidden onChange={event => { void importTemplates(event.target.files?.[0]); event.currentTarget.value = ''; }} /></div>{saved.length ? saved.map(item => <div className="saved-template-row" key={item.id}><button onClick={() => loadTemplate(item.id)}>{item.name} <small>{item.count} {th ? 'ภาพ' : 'photos'}</small></button><button className="text-link" onClick={() => useForGuest(item)}>{activeTemplateId === item.id ? (th ? 'ใช้แล้ว' : 'In use') : (th ? 'ใช้กับแขก' : 'Use for guests')}</button><button className="saved-template-delete" onClick={() => removeTemplate(item.id)} aria-label={`${th ? 'ลบเทมเพลต' : 'Delete template'} ${item.name}`}>×</button></div>) : <p>{th ? 'ยังไม่มีเทมเพลตที่บันทึกไว้' : 'No saved templates yet.'}</p>}</section>
   </>;
 }
 

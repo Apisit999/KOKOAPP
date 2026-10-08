@@ -172,6 +172,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .template-error { margin:0; color:var(--red); font-size:10px }
 .saved-template-list { max-width:850px; margin-top:16px }
 .saved-template-list h2 { margin:0 0 10px; font-size:12px }
+.template-archive-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
 .saved-template-list>p { color:var(--secondary); font-size:10px }
 .saved-template-row { display:flex; align-items:center; gap:8px; border-top:1px solid rgba(255,255,255,.07) }
 .saved-template-row>button:first-child { display:flex; flex:1; justify-content:space-between; gap:10px; padding:11px 5px; border:0; background:none; color:var(--text); text-align:left; font-size:10px }
@@ -737,3 +738,11 @@ button { -webkit-tap-highlight-color: transparent }
 .guest-display-qr strong { font-size:clamp(16px,2vw,25px) }
 .guest-display-qr span { font-size:clamp(11px,1.2vw,15px); line-height:1.5 }
 @media(max-width:600px) { .guest-display { padding:12px }.guest-display-qr { gap:10px; padding:8px }.guest-display-footer { min-height:85px } }
+.storage-settings>div { min-width:0; overflow-wrap:anywhere }
+.print-options { display:grid; gap:10px; border:1px solid var(--line); border-radius:14px; padding:14px; margin:0 0 16px; }
+.print-options legend { padding:0 6px; color:var(--muted); font-size:12px; }
+.print-options label { display:grid; gap:5px; font-size:13px; }
+.print-options select,.print-options input[type=number] { width:100%; min-height:40px; border:1px solid var(--line); border-radius:9px; padding:7px 10px; background:var(--surface); color:var(--text); }
+.print-job-list { display:grid; gap:8px; margin:12px 0 20px; }
+.print-job-row { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:9px 0; border-bottom:1px solid var(--line); font-size:12px; }
+.print-job-list small { color:var(--muted); line-height:1.5; }

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
@@ -69,4 +70,46 @@ test('cancelling a round with no saved photos marks it cancelled', t => {
   const store = new CaptureSessionStore(fixture(t));
   const session = store.start(null, null);
   assert.equal(store.cancel(session.id).status, 'cancelled');
+});
+
+test('cloud recovery includes older sessions and excludes retaken or cancelled rounds', t => {
+  const store = new CaptureSessionStore(fixture(t));
+  const sessions = [];
+  for (let index = 0; index < 13; index++) {
+    const session = store.start(null, null);
+    store.addPhoto(session.id, '5d60670b-3872-422c-bfd2-bbc48f27f8e1');
+    store.finish(session.id, 'review');
+    sessions.push(session);
+  }
+  store.finish(sessions[1].id, 'retaken');
+  store.finish(sessions[2].id, 'cancelled');
+
+  const recovery = store.listForCloudRecovery();
+  assert.equal(recovery.length, 11);
+  assert.ok(recovery.some(item => item.id === sessions[0].id));
+  assert.ok(!recovery.some(item => item.id === sessions[1].id || item.id === sessions[2].id));
+  assert.deepEqual(store.list(4, 3).map(item => item.id), sessions.slice().reverse().slice(3, 7).map(item => item.id));
+  assert.throws(() => store.list(20, -1), /Invalid capture session page/);
+});
+
+test('retains local session history beyond the former 2,000-round limit', t => {
+  const directory = fixture(t);
+  const oldestSessionId = randomUUID();
+  const existing = Array.from({ length: 2001 }, (_, index) => ({
+    id: index === 2000 ? oldestSessionId : randomUUID(), eventId: null, template: null,
+    photoIds: index === 2000 ? ['be0f22c5-963b-4a1b-8a1e-42177cafb63e'] : [],
+    status: 'confirmed', createdAt: '2026-10-04T00:00:00.000Z', updatedAt: '2026-10-04T00:00:00.000Z'
+  }));
+  writeFileSync(path.join(directory, 'capture-sessions.json'), JSON.stringify({ schemaVersion: 1, sessions: existing }));
+  const store = new CaptureSessionStore(directory);
+  const created = store.start(null, null);
+
+  assert.equal(store.listForCloudRecovery().length, 1);
+  assert.equal(store.listForCloudRecovery()[0].id, oldestSessionId);
+  assert.equal(store.list(200).length, 200);
+  assert.equal(store.get(oldestSessionId)?.id, oldestSessionId);
+  const persisted = JSON.parse(readFileSync(path.join(directory, 'capture-sessions.json'), 'utf8'));
+  assert.equal(persisted.sessions.length, 2002);
+  assert.equal(persisted.sessions.at(-1).id, oldestSessionId);
+  assert.notEqual(created.id, oldestSessionId);
 });
