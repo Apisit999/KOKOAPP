@@ -746,3 +746,16 @@ button { -webkit-tap-highlight-color: transparent }
 .print-job-list { display:grid; gap:8px; margin:12px 0 20px; }
 .print-job-row { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:9px 0; border-bottom:1px solid var(--line); font-size:12px; }
 .print-job-list small { color:var(--muted); line-height:1.5; }
+
+.guest-pin-settings { align-items: start; }
+.guest-pin-settings label,.guest-exit-dialog label { display:grid; gap:6px; max-width:320px; margin-top:12px; color:var(--text); font-size:10px; }
+.guest-pin-settings input,.guest-exit-dialog input { width:100%; min-height:40px; border:1px solid var(--border); border-radius:7px; padding:8px 11px; background:var(--surface,#111); color:var(--text); font:inherit; letter-spacing:.18em; }
+.guest-pin-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.guest-exit-backdrop { z-index:12; }
+.guest-exit-dialog { width:min(480px,100%); overflow:auto; }
+.guest-exit-copy { padding:25px; }
+.guest-exit-copy h2 { margin:0 0 8px; color:var(--text); font:500 27px/1.15 var(--serif); }
+.guest-exit-copy>p:not(.eyebrow) { color:var(--secondary); font-size:12px; }
+.guest-exit-copy form { display:grid; gap:12px; }
+.guest-exit-error { margin:0; color:var(--gold-light); font-size:11px; }
+.guest-exit-dialog .guest-pin-actions { margin-top:8px; }

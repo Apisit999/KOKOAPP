@@ -32,3 +32,12 @@ test('rejects invalid image payloads and preserves a damaged queue', t => {
   assert.throws(() => new PrintQueueStore(root), /existing data was preserved/);
   assert.equal(readFileSync(file, 'utf8'), '{broken');
 });
+
+test('records a simulated printer result without submitting a Windows print job', t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'koko-print-simulated-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const queue = new PrintQueueStore(root);
+  const job = queue.enqueue(png, { ...options, printerName: '__koko_simulated_printer__' });
+  assert.equal(queue.update(job.id, 'simulated').status, 'simulated');
+  assert.equal(new PrintQueueStore(root).get(job.id).status, 'simulated');
+});

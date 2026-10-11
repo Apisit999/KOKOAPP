@@ -2,7 +2,7 @@ import type { LicenseSnapshot, Plan } from './license-contract';
 
 export type Language = 'th' | 'en';
 export type Settings = { language: Language; highContrast: boolean; fullscreen: boolean };
-export type AppStatus = { version: string; settings: Settings; lastError: string | null };
+export type AppStatus = { version: string; settings: Settings; lastError: string | null; guestExitPinConfigured: boolean; guestModeActive: boolean };
 export type GuestDisplayPayload = { language: Language; eventName: string; status: 'ready' | 'connecting' | 'disconnected' | 'countdown' | 'capturing' | 'review'; mediaMode: 'photo' | 'video'; countdown: number | null; resultCount: number; previewDataUrl: string; qrDataUrl: string; message: string };
 export type PhotoCloudProgress = { sessionId: string; completed: number; total: number; uploadedCount: number };
 export type CameraFolderWatchStatus = { enabled: boolean; folderPath: string | null; importedCount: number; lastError: string | null };
@@ -28,6 +28,10 @@ export type Bridge = {
   isMacOS: boolean;
   getStatus(): Promise<AppStatus>;
   saveSettings(value: Settings): Promise<Settings>;
+  verifyGuestExitPin(pin: string): Promise<boolean>;
+  setGuestExitPin(currentPin: string | null, nextPin: string | null): Promise<boolean>;
+  setGuestModeActive(active: boolean): Promise<boolean>;
+  onOperatorAccessRequest(listener: () => void): () => void;
   setFullscreen(value: boolean): Promise<boolean>;
   listDisplays(): Promise<Array<{ id: number; label: string; width: number; height: number; primary: boolean; current: boolean }>>;
   openGuestDisplay(displayId?: number): Promise<boolean>;
@@ -78,6 +82,7 @@ export type Bridge = {
   getLicenseStatus(): Promise<LicenseSnapshot>;
   getLicensePlans(): Promise<Plan[]>;
   activateLicense(licenseKey: string): Promise<LicenseSnapshot>;
+  claimFreeLicense(): Promise<LicenseSnapshot>;
   deactivateLicense(): Promise<boolean>;
   listEvents(): Promise<{ events: PhotoboothEventWithCount[]; activeEventId: string | null }>;
   createEvent(value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;

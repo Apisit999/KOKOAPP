@@ -13,7 +13,7 @@ const services = [];
 const adminToken = 'test-only-admin-secret-with-more-than-32-chars';
 function setup(opts = {}) {
   let clock = Date.now();
-  const service = createLicenseServer({ privateKey, adminToken, dbPath: ':memory:', photoCloudRoot: tempRoot(), now: () => clock, env: {
+  const service = createLicenseServer({ privateKey, adminToken, dbPath: opts.dbPath ?? ':memory:', photoCloudRoot: tempRoot(), now: () => clock, env: {
     LICENSE_ENV: 'development', LICENSE_KEY_ID: 'koko-test-signing', LICENSE_PRODUCT_ID: 'koko-photobooth',
     LICENSE_OFFLINE_GRACE_HOURS: '72', LICENSE_REFRESH_HOURS: '24', LICENSE_RATE_LIMIT: '1000', ...opts.env
   } });
@@ -45,8 +45,64 @@ test('serves monthly, annual, and lifetime plans from server configuration', asy
   const { baseUrl } = await setup();
   const response = await fetch(`${baseUrl}/v1/desktop/plans`);
   const { plans } = await response.json();
-  assert.deepEqual(plans.map(plan => plan.billingPeriod).sort(), ['lifetime', 'month', 'year']);
+  assert.deepEqual(plans.map(plan => plan.billingPeriod).sort(), ['lifetime', 'lifetime', 'month', 'year']);
   assert.ok(plans.every(plan => plan.deviceLimit > 0 && plan.features.includes('capture')));
+});
+
+test('self-service Free claims are signed, persistent per device, and exclude cloud storage', async () => {
+  const { baseUrl, service, now } = await setup();
+  const plansResponse = await fetch(`${baseUrl}/v1/desktop/plans`);
+  const { plans } = await plansResponse.json();
+  const freePlan = plans.find(plan => plan.id === 'free');
+  assert.ok(freePlan);
+  assert.equal(freePlan.amountMinor, 0);
+  assert.equal(freePlan.billingPeriod, 'lifetime');
+  assert.equal(freePlan.deviceLimit, 1);
+  assert.deepEqual(freePlan.features, ['capture', 'printing', 'templates']);
+
+  const profile = tempRoot();
+  const runtime = makeRuntime(baseUrl, service.publicKey, profile, undefined, now);
+  assert.equal((await runtime.claimFreeLicense()).state, 'active');
+  assert.deepEqual((await runtime.getStatus()).features, ['capture', 'printing', 'templates']);
+  await assert.rejects(runtime.createPhotoFolder('Free cloud must be denied'), /does not include cloud/);
+
+  const device = JSON.parse(readFileSync(path.join(profile, 'license-device.json'), 'utf8')).deviceId;
+  const entitlement = JSON.parse(readFileSync(path.join(profile, 'license-entitlement.json'), 'utf8')).token;
+  const deniedCloudFolder = await fetch(`${baseUrl}/v1/desktop/photo-folders`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId: device, productId: 'koko-photobooth', entitlement, label: 'Denied cloud' })
+  });
+  assert.equal(deniedCloudFolder.status, 403);
+  assert.equal((await deniedCloudFolder.json()).code, 'feature_not_in_plan');
+
+  const claimAgain = await runtime.claimFreeLicense();
+  assert.equal(claimAgain.state, 'active');
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM free_device_claims').get().count, 1);
+  assert.equal(service.db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action='license.free_claimed'").get().count, 1);
+});
+
+test('Free claim reactivates a previously deactivated device', async () => {
+  const { baseUrl, service, now } = await setup();
+  const runtime = makeRuntime(baseUrl, service.publicKey, tempRoot(), undefined, now);
+  assert.equal((await runtime.claimFreeLicense()).state, 'active');
+  assert.equal(await runtime.deactivate(), true);
+  assert.equal(service.db.prepare("SELECT status FROM activations").get().status, 'deactivated');
+  assert.equal((await runtime.claimFreeLicense()).state, 'active');
+  assert.equal(service.db.prepare("SELECT status FROM activations").get().status, 'active');
+  assert.equal((await runtime.getStatus()).state, 'active');
+});
+
+test('upgrade adds cloud_sync to existing seeded paid plans while preserving other features', async () => {
+  const profile = tempRoot();
+  const dbPath = path.join(profile, 'licenses.sqlite');
+  const first = await setup({ dbPath });
+  first.service.db.prepare("UPDATE plans SET features_json=? WHERE id='annual'").run(JSON.stringify(['capture', 'printing', 'templates', 'custom_feature']));
+  first.service.close();
+  services.splice(services.indexOf(first.service), 1);
+  const upgraded = await setup({ dbPath });
+  const features = JSON.parse(upgraded.service.db.prepare("SELECT features_json FROM plans WHERE id='annual'").get().features_json);
+  assert.deepEqual(features, ['capture', 'printing', 'templates', 'custom_feature', 'cloud_sync']);
+  assert.ok(JSON.parse(upgraded.service.db.prepare("SELECT features_json FROM plans WHERE id='free'").get().features_json).every(feature => feature !== 'cloud_sync'));
 });
 
 test('activation integrates with Desktop signature verification and returns server status', async () => {

@@ -1,6 +1,6 @@
 # KOKO Photobooth implementation status
 
-Last reviewed: 2026-10-04
+Last reviewed: 2026-10-11
 
 This tracker records the current implementation after the owner authorized work across the full product roadmap. It supersedes older notes that required separate authorization for each milestone. External production deployment, paid-service provisioning, and publishing a release remain separate operational steps.
 
@@ -58,24 +58,36 @@ Deliver a rentable Photobooth desktop application that captures photos and short
 - Added portable template archive import/export in the desktop app, with three archive validation/merge checks.
 - Added a KOKOMEMORY desktop client for the website's existing init/signed-storage-upload/confirm contract, a durable per-album queue, encrypted credential storage, safe uploader-file import, retry recovery, and session/Settings controls. This implementation was aligned to a read-only review of the KOKOMEMORY source contract; the website repository was not modified.
 - Added Windows printer discovery and an application-managed durable print queue with composition preview, paper/orientation/copies options, retry for failed jobs, cancel for pending jobs, and status persistence after restart.
+- Added a salted Guest exit PIN stored by Electron Main, five-attempt lockout, PIN prompts for Guest mode exit paths, persistent kiosk state across unexpected restarts, and close/second-instance interception.
+- Added a server-listed Free plan, self-service signed Free entitlement per installation identifier, account-page claim UI, and cloud feature denial in the app and server. Free includes capture, printing, and templates; paid plans retain cloud sync.
 
 ## Verification and limits
 
-- `npm.cmd run typecheck` passed; all 20 automated suites passed (83 checks), including capture recovery, photo storage, template archive validation, camera-folder import/idempotency, mocked KOKOMEMORY integration, and print-queue recovery.
-- `npm.cmd run make` produced the Windows x64 setup executable and full Squirrel package for 0.1.22. Both were staged under `artifacts/releases/0.1.22/`; all SHA-256 checksums match. Authenticode reports the installer as `NotSigned`.
-- The packaged Electron renderer harness passed 14 Thai/English page and viewport checks with no renderer or asset errors, no horizontal overflow, and reduced-motion transition set to 0s. It uses a test profile without an activated license, so licensed feature controls, including printer setup and camera-folder controls, were not exercised in that UI run.
+- Free Early Access now has a server-signed per-installation entitlement with local capture, printing, and template features. Cloud albums are denied for Free. This is not yet linked to a kokomemory.com customer account, and the packaged build has no production API URL or trusted public key. See docs/COMMERCIAL_DEVELOPMENT_PLAN_TH.md and artifacts/verification/0.1.26/free-readiness.json.
+
+- `npm.cmd run typecheck` passed; all 20 automated test files passed (84 tests), including capture recovery, photo storage, template archive validation, camera-folder import/idempotency, mocked KOKOMEMORY integration, and print-queue recovery.
+- Windows x64 setup executable and full Squirrel package for 0.1.26 are staged under `artifacts/releases/0.1.26/`, with `INSTALL.txt` and verified SHA-256 checksums in `SHA256SUMS.txt`. Authenticode reports `NotSigned`.
+- The 0.1.25 packaged UI harness passed 15 checks for PIN setup, Thai/English pages, and assets. The 0.1.26 harness could not run because Windows AppContainer denied access to the build folder; the new Free UI has not yet been visually verified in the packaged app. See `artifacts/verification/0.1.26/free-readiness.json`.
 - The camera-folder service test imports from a temporary folder into the durable photo store, preserves the source file, and tests restart/crash-window deduplication. Real camera export software and JPEG samples still need a field test; direct DSLR shutter control is not implemented.
 - The print queue status `submitted` means Windows accepted the request; it cannot confirm that paper physically came out. Paper sizing, borderless modes, color output, printer selection, and offline/printer-driver behavior still need checks against the supported printer matrix.
 - KOKOMEMORY uploads have been exercised against a mocked API contract only. A real booking uploader JSON and staging album are still needed for an end-to-end live upload check. The customer gallery QR/token is separate from the uploader JSON, so the operator must paste the exact gallery URL from the KOKOMEMORY admin page if the app needs to show or copy that link. Upload supports JPEG photos up to 25 MB; KOKOMEMORY video publishing is not implemented.
-- Remaining release work includes a signed installer, update channel and rollback, installation/upgrade/uninstall checks on a target Windows computer, and a real event rehearsal. macOS packaging is not implemented.
+- Remaining release work includes production License API URL and trusted signing key configuration, connecting Free claims to kokomemory.com accounts, a signed installer, update channel and rollback, installation/upgrade/uninstall checks on a target Windows computer, payment checkout/webhooks, and a real event rehearsal. macOS packaging is not implemented.
 - Sticker assets remain PNG-only, up to 100 KB and four per photo/video format. Multi-file template bundles and shared team libraries are not implemented. The existing cloud album still uses one secret URL per capture session and needs PIN access before production cloud rollout.
 
 ## Next implementation order
 
-1. Test guest-display connect, close, changing monitors, hot unplug, and reconnect on physical displays; verify microphone allow/deny, audio in framed/unframed clips, and microphone disconnect on the target PC.
-2. Verify KOKOMEMORY publishing with a staging booking: import its uploader JSON, upload a confirmed JPEG session, and open/scan the customer gallery URL on a phone.
-3. Verify installer install, upgrade, preserved user data, and uninstall behavior on a target Windows computer.
-4. Confirm mixed photo/video gallery delivery on a phone, QR readability at print size, recovery after network loss, and sharing permissions.
-5. Test approved print layouts, real paper dimensions, color output, queue retry/cancellation, and camera-folder handoff with target devices; add vendor shutter control only for named, supported models.
-6. Add secure guest access options (such as a PIN) before any production cloud rollout; per-license plan storage/retention controls are now implemented.
-7. Complete deployment operations: signed installer, update channel and rollback, backups, monitoring, support diagnostics, and a real event rehearsal.
+1. Complete a hardware-free Free workflow using sample captures and simulated print status, including review/retake, composition, confirmation, and restart recovery.
+2. Fix and rerun the packaged UI harness for 0.1.26 from a Windows-readable application directory.
+3. Configure the production License API URL and trusted public key; connect Free entitlements to kokomemory.com accounts when its source/API is available.
+4. Verify KOKOMEMORY upload and gallery QR with a staging booking; decide the Free cloud allowance before enabling it.
+5. Add checkout, payment confirmation/webhooks, renewals, and owner administration after package prices and terms are selected.
+6. Test installation/upgrade and the camera/printer/guest-display matrix when target devices are available.
+7. Complete signing, update/rollback, diagnostics, backups, and an event rehearsal.
+
+## Follow-up fixes and verification (2026-10-11, 0.1.27)
+
+- Fixed Free reactivation after local deactivation, refresh after offline grace when server is reachable, and seeded paid plan migration to include cloud_sync without losing custom features.
+- Changed built-in sample photo URL to be relative to the packaged renderer page. Confirmed four SVG assets are included in app.asar.
+- Added a no-device simulated print result to the application-managed queue.
+- Verification after changes: typecheck passed, 88/88 tests across 20 files passed, and Windows x64 Squirrel installer generated. Packaged Thai UI rendered at three desktop resolutions; the UI harness did not complete because the packaged app has no configured license service. Physical hardware, production activation, installer lifecycle, and code signing remain unverified.
+- Release bundle: artifacts/releases/0.1.27. See artifacts/verification/0.1.27/readiness.json and docs/PROJECT_READINESS_REVIEW_TH.md.

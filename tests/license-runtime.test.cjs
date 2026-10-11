@@ -82,6 +82,32 @@ test('uses only the signed bounded offline grace when refresh is unavailable', a
   assert.equal((await rolledBack.getStatus()).state, 'server_error');
 });
 
+test('refreshes an entitlement after offline grace ends when the service is reachable again', async () => {
+  const dir = root();
+  const issuedAt = Date.parse('2026-03-01T00:00:00.000Z');
+  let deviceId;
+  const initial = new LicenseRuntime({
+    userDataPath: dir, apiBaseUrl: 'https://license.example.test', productId: 'koko-photobooth', trustedKeys,
+    now: () => issuedAt,
+    fetcher: async (_url, init) => { deviceId = JSON.parse(init.body).deviceId; return new Response(JSON.stringify({ entitlement: signed(deviceId, issuedAt) }), { status: 200 }); }
+  });
+  await initial.activate('KOKO-REAL-KEY-123');
+  const onlineAfterGrace = issuedAt + 4 * 86_400_000;
+  let refreshed = false;
+  const reconnect = new LicenseRuntime({
+    userDataPath: dir, apiBaseUrl: 'https://license.example.test', productId: 'koko-photobooth', trustedKeys,
+    now: () => onlineAfterGrace,
+    fetcher: async (url, init) => {
+      assert.equal(url, 'https://license.example.test/v1/desktop/leases/refresh');
+      assert.equal(JSON.parse(init.body).deviceId, deviceId);
+      refreshed = true;
+      return new Response(JSON.stringify({ entitlement: signed(deviceId, onlineAfterGrace) }), { status: 200 });
+    }
+  });
+  assert.equal((await reconnect.getStatus()).state, 'active');
+  assert.equal(refreshed, true);
+});
+
 test('rejects a server response signed for another installation', async () => {
   const runtime = new LicenseRuntime({
     userDataPath: root(), apiBaseUrl: 'https://license.example.test', productId: 'koko-photobooth', trustedKeys,

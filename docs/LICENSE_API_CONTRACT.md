@@ -4,13 +4,19 @@ Status: client contract implemented; no production API, public signing key, or p
 
 ## Desktop configuration
 
-Set `LICENSE_API_BASE_URL` to the production HTTPS origin, set `LICENSE_TRUSTED_KEYS` to a key ID to PEM public-key map, and keep `LICENSE_PRODUCT_ID` aligned with the server product. These values are public configuration. Never put a signing private key, payment secret, or provider API key in this repository or Desktop build. Use a different trusted public key for staging and production where practical.
+Set build-time `KOKO_LICENSE_API_BASE_URL` to the production HTTPS origin and `KOKO_LICENSE_TRUSTED_KEYS_JSON` to a key ID to PEM public-key map, and keep `LICENSE_PRODUCT_ID` aligned with the server product. These values are public configuration. Never put a signing private key, payment secret, or provider API key in this repository or Desktop build. Use a different trusted public key for staging and production where practical.
 
 The Desktop persists a random installation ID and the signed entitlement in the OS user data directory. The installation ID is not a secret. The entitlement is accepted only after RS256 signature, key ID, product ID, installation ID, feature list, and date checks pass in Electron Main. Local files and Renderer state cannot grant features by themselves.
 
 ## Endpoints
 
 All requests use HTTPS JSON, a bounded request timeout, and a server generated decision. The server must authorize every operation and rate limit license-key attempts.
+
+### Claim Free
+
+`POST /v1/desktop/licenses/free/claim`
+
+Request contains `deviceId` (the persistent Desktop installation UUID) and `productId`. The server returns a signed Free entitlement. Repeating the claim for the same installation returns the existing license. Free currently grants `capture`, `printing`, and `templates`; it does not grant `cloud_sync`. This self-service claim is not connected to a kokomemory.com customer account yet, so account ownership, device recovery, and cross-device transfer still require a later authenticated website flow.
 
 ### Activate
 

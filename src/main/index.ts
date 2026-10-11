@@ -20,6 +20,7 @@ import { KokoMemoryConnectionStore } from './services/koko-memory-connection-sto
 import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
 import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
 import { PrintQueueStore, type PrintJob, type PrintOptionsSnapshot } from './services/print-queue';
+import { GuestExitPinStore } from './services/guest-exit-pin';
 
 function handleSquirrelEvent(): boolean {
   if (process.platform !== 'win32') return false;
@@ -49,12 +50,17 @@ if (!hasSingleInstanceLock) app.quit();
 const defaults: Settings = { language: 'th', highContrast: false, fullscreen: false };
 let mainWindow: BrowserWindow | null = null;
 let guestDisplayWindow: BrowserWindow | null = null;
+let guestModeActive = false;
 let lastError: string | null = null;
 if (hasSingleInstanceLock) {
-  app.on('second-instance', () => { mainWindow?.show(); mainWindow?.focus(); });
+  app.on('second-instance', () => {
+    mainWindow?.show(); mainWindow?.focus();
+    if (guestModeActive) mainWindow?.webContents.send('koko:operator-access-request');
+  });
 }
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
+const guestModeFile = () => path.join(dataDir(), 'guest-mode.json');
 const photoStorageConfigFile = () => path.join(dataDir(), 'photo-storage.json');
 const cameraFolderConfigFile = () => path.join(dataDir(), 'camera-folder.json');
 const photoStores = new Map<string, PhotoStore>();
@@ -80,6 +86,8 @@ let kokoMemoryQueue: KokoMemorySyncStore | null = null;
 let kokoMemoryClient: KokoMemoryApiClient | null = null;
 let kokoMemoryDrainRunning = false;
 let printQueueStore: PrintQueueStore | null = null;
+let guestExitPinStore: GuestExitPinStore | null = null;
+function guestExitPins() { if (!guestExitPinStore) guestExitPinStore = new GuestExitPinStore(dataDir()); return guestExitPinStore; }
 const activePrintWindows = new Map<string, BrowserWindow>();
 let printQueueRunning = false;
 function memoryConnections() {
@@ -324,6 +332,16 @@ function readSettings(): Settings {
   } catch { /* Missing or invalid file uses safe defaults. */ }
   return defaults;
 }
+function readGuestModeActive() {
+  if (!existsSync(guestModeFile())) return false;
+  try {
+    const value: unknown = JSON.parse(readFileSync(guestModeFile(), 'utf8'));
+    return Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).active === true);
+  } catch (error) {
+    log('guest-mode-state-read-failed', error);
+    return true;
+  }
+}
 function validSettings(value: unknown): value is Settings {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -351,7 +369,12 @@ function trustedMediaRequest(webContents: Electron.WebContents | null, requestin
     return path.resolve(fileURLToPath(requestingUrl)) === expectedPath;
   } catch { return false; }
 }
-function status(): AppStatus { return { version: app.getVersion(), settings: readSettings(), lastError }; }
+function status(): AppStatus {
+  let guestExitPinConfigured = true;
+  try { guestExitPinConfigured = guestExitPins().isConfigured(); }
+  catch (error) { log('guest-exit-pin-read-failed', error); }
+  return { version: app.getVersion(), settings: readSettings(), lastError, guestExitPinConfigured, guestModeActive };
+}
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
@@ -362,7 +385,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false }
   });
   mainWindow.setMenuBarVisibility(false);
-  mainWindow.setFullScreen(readSettings().fullscreen);
+  mainWindow.setFullScreen(readSettings().fullscreen || guestModeActive);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const current = mainWindow?.webContents.getURL();
@@ -383,6 +406,14 @@ function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     lastError = 'Renderer stopped: ' + details.reason;
     log('renderer-gone', undefined, { reason: details.reason, exitCode: details.exitCode });
+  });
+  mainWindow.on('close', event => {
+    if (!guestModeActive) return;
+    event.preventDefault();
+    mainWindow?.webContents.send('koko:operator-access-request');
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (guestModeActive) mainWindow?.webContents.send('koko:operator-access-request');
   });
   mainWindow.on('closed', () => { mainWindow = null; });
   const load = MAIN_WINDOW_VITE_DEV_SERVER_URL
@@ -478,8 +509,9 @@ app.on('ready', () => {
     return printers.map(printer => ({ name: printer.name, displayName: printer.displayName, description: printer.description }));
   });
   ipcMain.handle('koko:print-jobs', event => { trusted(event); drainPrintQueue(); return printQueue().list(); });
-  ipcMain.handle('koko:print-submit', (event, value: unknown, options: unknown) => {
+  ipcMain.handle('koko:print-submit', async (event, value: unknown, options: unknown) => {
     trusted(event);
+    await licenses().assertFeature('printing');
     if (!(value instanceof Uint8Array) || value.byteLength > 30 * 1024 * 1024 || !options || typeof options !== 'object') throw new Error('Invalid print request.');
     const image = nativeImage.createFromBuffer(Buffer.from(value));
     const size = image.getSize();
@@ -489,6 +521,12 @@ app.on('ready', () => {
     const snapshot: PrintOptionsSnapshot = {
       printerName, paper: input.paper as PrintOptionsSnapshot['paper'], landscape: input.landscape as boolean, copies: input.copies as number
     };
+    if (printerName === '__koko_simulated_printer__') {
+      const job = printQueue().enqueue(value, snapshot);
+      const simulated = printQueue().update(job.id, 'simulated');
+      log('print-job-simulated', undefined, { jobId: job.id, copies: snapshot.copies, paper: snapshot.paper });
+      return simulated;
+    }
     if (printerName) {
       if (!mainWindow) throw new Error('Printer list is unavailable.');
       return mainWindow.webContents.getPrintersAsync().then(printers => {
@@ -534,6 +572,30 @@ app.on('ready', () => {
       return value;
     }
     catch (error) { lastError = 'Could not save settings'; log('settings-error', error); throw new Error(lastError); }
+  });
+  ipcMain.handle('koko:guest-exit-pin-verify', (event, pin: unknown) => {
+    trusted(event);
+    return guestExitPins().verify(pin);
+  });
+  ipcMain.handle('koko:guest-exit-pin-set', (event, currentPin: unknown, nextPin: unknown) => {
+    trusted(event);
+    return guestExitPins().set(currentPin, nextPin);
+  });
+  ipcMain.handle('koko:guest-mode-active', (event, active: unknown) => {
+    trusted(event);
+    if (typeof active !== 'boolean') throw new Error('Invalid Guest mode state.');
+    const temporaryFile = `${guestModeFile()}.tmp`;
+    try {
+      mkdirSync(dataDir(), { recursive: true });
+      writeFileSync(temporaryFile, JSON.stringify({ active }), { encoding: 'utf8', mode: 0o600 });
+      renameSync(temporaryFile, guestModeFile());
+      guestModeActive = active;
+    } catch (error) {
+      try { unlinkSync(temporaryFile); } catch { /* Preserve the state-write error. */ }
+      log('guest-mode-state-write-failed', error);
+      throw new Error('Could not update Guest mode state.');
+    }
+    return guestModeActive;
   });
   ipcMain.handle('koko:fullscreen', (event, value: unknown) => {
     trusted(event);
@@ -694,6 +756,12 @@ app.on('ready', () => {
   });
   ipcMain.handle('koko:license-status', async event => { trusted(event); return licenses().getStatus(); });
   ipcMain.handle('koko:license-plans', async event => { trusted(event); return licenses().getPlans(); });
+  ipcMain.handle('koko:license-free-claim', async event => {
+    trusted(event);
+    const result = await licenses().claimFreeLicense();
+    log('license-free-claimed', undefined, { state: result.state });
+    return result;
+  });
   ipcMain.handle('koko:license-activate', async (event, value: unknown) => {
     trusted(event);
     if (typeof value !== 'string') throw new Error('Invalid license key');
@@ -1035,6 +1103,7 @@ app.on('ready', () => {
     if (removed) log('photo-moved-to-trash', undefined, { id });
     return removed;
   });
+  guestModeActive = readGuestModeActive();
   createWindow();
   cameraFolderConfig = readCameraFolderConfig();
   if (cameraFolderConfig.enabled && cameraFolderConfig.folderPath) {

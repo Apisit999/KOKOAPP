@@ -63,10 +63,6 @@ export class LicenseRuntime {
       return this.snapshot('expired', local.claims?.features ?? [], local.claims?.expiresAt ?? null, local.claims?.offlineUntil ?? null);
     }
     if (local.state === 'server_error' && local.reason !== 'offline-window-ended') return FAILED;
-    if (local.reason === 'offline-window-ended') {
-      try { this.writeLastObserved(Math.max(currentTime, lastObserved ?? currentTime)); } catch { return FAILED; }
-      return FAILED;
-    }
     try { this.writeLastObserved(Math.max(currentTime, lastObserved ?? currentTime)); } catch { return FAILED; }
 
     try {
@@ -109,6 +105,28 @@ export class LicenseRuntime {
     return this.fromVerification(result);
   }
 
+  async claimFreeLicense(): Promise<LicenseSnapshot> {
+    if (!this.isConfigured()) throw new Error('License service is not configured');
+    const response = await this.request('/v1/desktop/licenses/free/claim', {
+      method: 'POST', body: JSON.stringify({ deviceId: this.getDeviceId(), productId: this.options.productId })
+    });
+    const body: unknown = await this.readJson(response);
+    if (!isObject(body) || !response.ok || typeof body.entitlement !== 'string') {
+      const code = isObject(body) && typeof body.code === 'string' ? body.code : '';
+      throw new Error(code === 'revoked' ? 'The Free license for this device was revoked' : 'A Free license could not be issued by the service');
+    }
+    const result = this.verifyToken(body.entitlement, false);
+    const expected = ['capture', 'printing', 'templates'];
+    if (result.state !== 'active' || !result.claims || result.claims.expiresAt !== null
+      || expected.some(feature => !result.claims?.features.includes(feature as LicenseFeature))
+      || result.claims.features.some(feature => !expected.includes(feature))) {
+      throw new Error('The Free license signature or feature policy is invalid');
+    }
+    this.writeToken(body.entitlement);
+    this.writeLastObserved(this.now());
+    return this.fromVerification(result);
+  }
+
   async getPlans(): Promise<Plan[]> {
     if (!this.isConfigured()) return [];
     const response = await this.request('/v1/desktop/plans', { method: 'GET' });
@@ -128,6 +146,7 @@ export class LicenseRuntime {
     if (!this.isConfigured()) throw new Error('Photo cloud service is not configured');
     const status = await this.getStatus();
     if (status.state !== 'active') throw new Error('An active license is required to create a private photo folder');
+    if (!status.features.includes('cloud_sync')) throw new Error('The current plan does not include cloud photo albums');
     const token = this.readToken();
     const response = await this.request('/v1/desktop/photo-folders', {
       method: 'POST', body: JSON.stringify({ deviceId: this.getDeviceId(), productId: this.options.productId, entitlement: token, label })

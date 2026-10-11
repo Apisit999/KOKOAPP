@@ -6,7 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { PhotoCloudStore, MAX_PHOTO_BYTES, MAX_VIDEO_BYTES } = require('./photo-cloud-store.cjs');
 
 const PRODUCT_ID = 'koko-photobooth';
-const FEATURES = ['capture', 'printing', 'templates'];
+const FEATURES = ['capture', 'printing', 'templates', 'cloud_sync'];
 const DAY = 86_400_000;
 
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS licenses (
   status TEXT NOT NULL CHECK(status IN ('active','revoked','expired')), starts_at TEXT NOT NULL,
   expires_at TEXT, max_devices INTEGER NOT NULL CHECK(max_devices > 0), development INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS free_device_claims (
+  device_id TEXT PRIMARY KEY, license_id TEXT NOT NULL UNIQUE REFERENCES licenses(id), created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS activations (
   id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(id), device_id TEXT NOT NULL,
@@ -104,12 +107,25 @@ function createLicenseServer(options = {}) {
   if (!Number.isInteger(defaultRetentionDays) || defaultRetentionDays < 1 || defaultRetentionDays > 3650) throw new Error('KOKO_PHOTO_CLOUD_RETENTION_DAYS must be between 1 and 3650');
   if (!Number.isSafeInteger(defaultTenantQuotaBytes) || defaultTenantQuotaBytes < 1048576 || defaultTenantQuotaBytes > 1099511627776) throw new Error('KOKO_PHOTO_CLOUD_TENANT_QUOTA_BYTES must be between 1 MiB and 1 TiB');
   const defaultPlans = [
+    ['free', 'Free', 'lifetime', 0, 'THB', 1],
     ['monthly', 'Monthly', 'month', 1900, 'USD', 2],
     ['annual', 'Annual', 'year', 19000, 'USD', 2],
     ['lifetime', 'Lifetime', 'lifetime', 39900, 'USD', 2]
   ];
   const insertPlan = db.prepare('INSERT OR IGNORE INTO plans(id,name,billing_period,amount_minor,currency,device_limit,features_json,photo_retention_days,photo_storage_quota_bytes) VALUES(?,?,?,?,?,?,?,?,?)');
-  for (const [id, name, period, amount, currency, limit] of defaultPlans) insertPlan.run(id, name, period, amount, currency, limit, JSON.stringify(FEATURES), defaultRetentionDays, defaultTenantQuotaBytes);
+  for (const [id, name, period, amount, currency, limit] of defaultPlans) {
+    const features = id === 'free' ? ['capture', 'printing', 'templates'] : FEATURES;
+    insertPlan.run(id, name, period, amount, currency, limit, JSON.stringify(features), defaultRetentionDays, defaultTenantQuotaBytes);
+  }
+  // Upgrade seeded paid plans created before cloud_sync was declared as a feature.
+  // Preserve custom plan definitions and all other configured features.
+  const upgradePaidPlans = db.prepare("SELECT id,features_json FROM plans WHERE id IN ('monthly','annual','lifetime')");
+  const savePlanFeatures = db.prepare('UPDATE plans SET features_json=?,version=version+1 WHERE id=?');
+  for (const plan of upgradePaidPlans.all()) {
+    let features;
+    try { features = JSON.parse(plan.features_json); } catch { continue; }
+    if (Array.isArray(features) && !features.includes('cloud_sync')) savePlanFeatures.run(JSON.stringify([...features, 'cloud_sync']), plan.id);
+  }
   const publicKey = createPublicKey(privateKey);
   const publicPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const limits = new Map();
@@ -224,6 +240,15 @@ function createLicenseServer(options = {}) {
     audit('license.issued', { actor: development ? 'development-admin' : 'admin', licenseId, details: { planId, development: Boolean(development) } });
     return { licenseId, licenseKey, planId, startsAt, expiresAt, maxDevices: plan.device_limit, development: Boolean(development) };
   }
+  function requireCloudUploadPlan(folderId, ownerKey) {
+    const folder = db.prepare(`SELECT f.license_id,p.features_json FROM photo_cloud_folders f
+      LEFT JOIN licenses l ON l.id=f.license_id LEFT JOIN plans p ON p.id=l.plan_id
+      WHERE f.id=? AND f.owner_key_hash=?`).get(folderId, hash(ownerKey));
+    if (!folder) throw Object.assign(new Error('photo_folder_not_found'), { status: 404 });
+    if (folder.license_id && (!folder.features_json || !JSON.parse(folder.features_json).includes('cloud_sync'))) {
+      throw Object.assign(new Error('feature_not_in_plan'), { status: 403 });
+    }
+  }
 
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -246,9 +271,49 @@ function createLicenseServer(options = {}) {
         const plans = db.prepare('SELECT id,version,name,billing_period,amount_minor,currency,device_limit,features_json,photo_retention_days,photo_storage_quota_bytes FROM plans WHERE active = 1 ORDER BY amount_minor').all();
         return respond(res, 200, { plans: plans.map(p => ({ id: p.id, version: p.version, name: p.name, billingPeriod: p.billing_period, amountMinor: p.amount_minor, currency: p.currency, deviceLimit: p.device_limit, features: JSON.parse(p.features_json), photoRetentionDays: p.photo_retention_days, photoStorageQuotaBytes: p.photo_storage_quota_bytes })) });
       }
+      if (req.method === 'POST' && url.pathname === '/v1/desktop/licenses/free/claim') {
+        const body = await readBody(req);
+        if (!body || typeof body.deviceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.deviceId) || body.productId !== productId) {
+          return respond(res, 400, { code: 'invalid_request', requestId });
+        }
+        const freeEntitlementFor = license => signedEntitlement({ ...license, features_json: db.prepare('SELECT features_json FROM plans WHERE id=?').get(license.plan_id).features_json }, body.deviceId);
+        const existing = db.prepare('SELECT l.* FROM free_device_claims c JOIN licenses l ON l.id=c.license_id WHERE c.device_id=?').get(body.deviceId);
+        if (existing) {
+          if (existing.status !== 'active') return respond(res, 403, { code: existing.status === 'revoked' ? 'revoked' : 'expired', requestId });
+          const entitlement = transact(() => {
+            const at = new Date(now()).toISOString();
+            const activation = db.prepare('SELECT * FROM activations WHERE license_id=? AND device_id=?').get(existing.id, body.deviceId);
+            if (activation) db.prepare("UPDATE activations SET status='active',deactivated_at=NULL,last_seen_at=? WHERE id=?").run(at, activation.id);
+            else db.prepare("INSERT INTO activations(id,license_id,device_id,status,activated_at,last_seen_at) VALUES(?,?,?,'active',?,?)").run(randomUUID(), existing.id, body.deviceId, at, at);
+            return freeEntitlementFor(existing);
+          });
+          return respond(res, 200, { entitlement });
+        }
+        const result = transact(() => {
+          const raced = db.prepare('SELECT l.* FROM free_device_claims c JOIN licenses l ON l.id=c.license_id WHERE c.device_id=?').get(body.deviceId);
+          if (raced) {
+            if (raced.status !== 'active') return { entitlement: null, created: false, status: raced.status };
+            const at = new Date(now()).toISOString();
+            const activation = db.prepare('SELECT * FROM activations WHERE license_id=? AND device_id=?').get(raced.id, body.deviceId);
+            if (activation) db.prepare("UPDATE activations SET status='active',deactivated_at=NULL,last_seen_at=? WHERE id=?").run(at, activation.id);
+            else db.prepare("INSERT INTO activations(id,license_id,device_id,status,activated_at,last_seen_at) VALUES(?,?,?,'active',?,?)").run(randomUUID(), raced.id, body.deviceId, at, at);
+            return { entitlement: freeEntitlementFor(raced), created: false, status: raced.status };
+          }
+          const at = new Date(now()).toISOString();
+          const license = issueLicense({ planId: 'free', development: false });
+          db.prepare('INSERT INTO free_device_claims(device_id,license_id,created_at) VALUES(?,?,?)').run(body.deviceId, license.licenseId, at);
+          db.prepare("INSERT INTO activations(id,license_id,device_id,status,activated_at,last_seen_at) VALUES(?,?,?,'active',?,?)").run(randomUUID(), license.licenseId, body.deviceId, at, at);
+          audit('license.free_claimed', { actor: 'self-service', licenseId: license.licenseId, deviceId: body.deviceId, requestId });
+          const record = db.prepare('SELECT l.*,p.features_json FROM licenses l JOIN plans p ON p.id=l.plan_id WHERE l.id=?').get(license.licenseId);
+          return { entitlement: signedEntitlement(record, body.deviceId), created: true, status: 'active' };
+        });
+        if (!result.entitlement) return respond(res, 403, { code: result.status === 'revoked' ? 'revoked' : 'expired', requestId });
+        return respond(res, result.created ? 201 : 200, { entitlement: result.entitlement });
+      }
       if (req.method === 'POST' && url.pathname === '/v1/desktop/photo-folders') {
         const body = await readBody(req);
         const { claims } = requireActiveDesktopLicense(body);
+        if (!claims.features.includes('cloud_sync')) throw Object.assign(new Error('feature_not_in_plan'), { status: 403 });
         const policy = db.prepare('SELECT photo_retention_days FROM plans JOIN licenses ON licenses.plan_id=plans.id WHERE licenses.id=?').get(claims.licenseId);
         if (!policy) throw Object.assign(new Error('Photo cloud license policy is unavailable'), { status: 503 });
         const folder = photoCloud.createFolder(body.label, { licenseId: claims.licenseId, retentionDays: policy.photo_retention_days });
@@ -266,6 +331,7 @@ function createLicenseServer(options = {}) {
         if (req.headers['content-type'] !== 'image/jpeg') return respond(res, 415, { code: 'unsupported_media_type', requestId });
         const ownerKey = bearer(req);
         if (!ownerKey) return respond(res, 404, { code: 'photo_folder_not_found', requestId });
+        requireCloudUploadPlan(uploadMatch[1], ownerKey);
         const bytes = await readBinaryBody(req);
         const photo = photoCloud.savePhoto(uploadMatch[1], uploadMatch[2], ownerKey, bytes);
         return respond(res, 201, photo);
@@ -285,6 +351,7 @@ function createLicenseServer(options = {}) {
         if (req.headers['content-type'] !== 'video/webm') return respond(res, 415, { code: 'unsupported_media_type', requestId });
         const ownerKey = bearer(req);
         if (!ownerKey) return respond(res, 404, { code: 'photo_folder_not_found', requestId });
+        requireCloudUploadPlan(videoUploadMatch[1], ownerKey);
         const bytes = await readBinaryBody(req, MAX_VIDEO_BYTES);
         const video = photoCloud.saveVideo(videoUploadMatch[1], videoUploadMatch[2], ownerKey, bytes);
         return respond(res, 201, video);

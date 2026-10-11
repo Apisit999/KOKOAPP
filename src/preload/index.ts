@@ -5,6 +5,14 @@ const bridge: Bridge = {
   isMacOS: process.platform === 'darwin',
   getStatus: () => ipcRenderer.invoke('koko:status'),
   saveSettings: value => ipcRenderer.invoke('koko:settings', value),
+  verifyGuestExitPin: pin => ipcRenderer.invoke('koko:guest-exit-pin-verify', pin),
+  setGuestExitPin: (currentPin, nextPin) => ipcRenderer.invoke('koko:guest-exit-pin-set', currentPin, nextPin),
+  setGuestModeActive: active => ipcRenderer.invoke('koko:guest-mode-active', active),
+  onOperatorAccessRequest: listener => {
+    const handler = () => listener();
+    ipcRenderer.on('koko:operator-access-request', handler);
+    return () => ipcRenderer.removeListener('koko:operator-access-request', handler);
+  },
   setFullscreen: value => ipcRenderer.invoke('koko:fullscreen', value),
   listDisplays: () => ipcRenderer.invoke('koko:display-list'),
   openGuestDisplay: displayId => ipcRenderer.invoke('koko:display-open', displayId),
@@ -67,6 +75,7 @@ const bridge: Bridge = {
   getLicenseStatus: () => ipcRenderer.invoke('koko:license-status'),
   getLicensePlans: () => ipcRenderer.invoke('koko:license-plans'),
   activateLicense: licenseKey => ipcRenderer.invoke('koko:license-activate', licenseKey),
+  claimFreeLicense: () => ipcRenderer.invoke('koko:license-free-claim'),
   deactivateLicense: () => ipcRenderer.invoke('koko:license-deactivate'),
   listEvents: () => ipcRenderer.invoke('koko:events-list'),
   createEvent: value => ipcRenderer.invoke('koko:events-create', value),

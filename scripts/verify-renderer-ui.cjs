@@ -42,6 +42,36 @@ app.on('browser-window-created', (_event, win) => {
       }
       await evaluate(win, `Array.from(document.querySelectorAll('.sidebar nav button')).find(button => /Settings|ตั้งค่า/.test(button.textContent))?.click()`);
       await pause();
+      stage = 'Guest exit PIN setup and verification';
+      await inspect(win, 'settings-pin', 1280, 720);
+      report.guestPinFlow = await evaluate(win, `(async () => {
+        const panel = document.querySelector('.guest-pin-settings');
+        if (!panel) return { panelPresent: false };
+        const setValue = (input, value) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+          setter.call(input, value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        setValue(panel.querySelector('input'), '718293');
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const confirmation = panel.querySelectorAll('input')[1];
+        if (!confirmation) return { panelPresent: true, confirmationPresent: false };
+        setValue(confirmation, '718293');
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        Array.from(panel.querySelectorAll('button')).find(button => /Set PIN|ตั้ง PIN/.test(button.textContent))?.click();
+        let configured = false;
+        for (let i = 0; i < 30 && !configured; i++) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          configured = (await window.koko.getStatus()).guestExitPinConfigured;
+        }
+        const wrongPinAccepted = await window.koko.verifyGuestExitPin('000000');
+        const correctPinAccepted = await window.koko.verifyGuestExitPin('718293');
+        const pinLeakedInStatus = JSON.stringify(await window.koko.getStatus()).includes('718293');
+        const removed = await window.koko.setGuestExitPin('718293', null);
+        const cleared = !(await window.koko.getStatus()).guestExitPinConfigured;
+        return { panelPresent: true, confirmationPresent: true, configured, wrongPinAccepted, correctPinAccepted, pinLeakedInStatus, removed, cleared };
+      })()`);
+      if (!report.guestPinFlow.panelPresent || !report.guestPinFlow.confirmationPresent || !report.guestPinFlow.configured || report.guestPinFlow.wrongPinAccepted || !report.guestPinFlow.correctPinAccepted || report.guestPinFlow.pinLeakedInStatus || !report.guestPinFlow.removed || !report.guestPinFlow.cleared) throw new Error('Guest exit PIN flow failed');
       await evaluate(win, `Array.from(document.querySelectorAll('.diagnostics-link button')).find(button => /diagnostics|วินิจฉัย/i.test(button.textContent))?.click()`);
       await pause();
       for (const [width, height] of [[1280,720],[1366,768],[1920,1080]]) {
@@ -62,6 +92,8 @@ app.on('browser-window-created', (_event, win) => {
       await evaluate(win, `document.querySelector('.topbar-account').click()`);
       await pause();
       await inspect(win, 'account-en', 1280, 720);
+      report.freePlanUI = await evaluate(win, `({ freeCardPresent: Boolean(document.querySelector('.free-plan-card')), freeButtonVisible: Boolean(Array.from(document.querySelectorAll('.free-plan-card button')).find(button => /Claim Free license/.test(button.textContent))), cloudExclusionExplained: /Cloud albums are not included/.test(document.querySelector('.free-plan-card')?.textContent || '') })`);
+      if (!report.freePlanUI.freeCardPresent || !report.freePlanUI.freeButtonVisible || !report.freePlanUI.cloudExclusionExplained) throw new Error('Free plan account UI check failed');
       await evaluate(win, `document.querySelector('.brand-button').click()`);
       await pause();
       await inspect(win, 'dashboard-en', 1280, 720);
@@ -104,12 +136,15 @@ async function inspect(win, page, width, height) {
       editorialLoaded: document.fonts.check('400 48px "Cormorant Garamond"', 'Capture Studio'),
       bridgePresent: typeof window.koko?.getStatus === 'function',
       decorativePointerEvents: getComputedStyle(document.querySelector('.shell'),'::before').pointerEvents,
+      brokenPublicImages: Array.from(document.images)
+        .filter(image => /koko-studio-mark\.png|portrait-one\.svg/.test(image.getAttribute('src') || '') && (!image.complete || image.naturalWidth === 0))
+        .map(image => image.getAttribute('src')),
       preview: camera && { width: camera.width, height: camera.height }
     };
   })()`);
   report.checks.push(check);
   check.loadedFontFaces = loadedFaces;
-  if (check.horizontalOverflow || loadedFaces.some(count => count < 1) || !check.thaiLoaded || !check.editorialLoaded || !check.bridgePresent || check.decorativePointerEvents !== 'none') throw new Error('Font, bridge, decoration or horizontal overflow check failed');
+  if (check.horizontalOverflow || check.brokenPublicImages.length || loadedFaces.some(count => count < 1) || !check.thaiLoaded || !check.editorialLoaded || !check.bridgePresent || check.decorativePointerEvents !== 'none') throw new Error('Image, font, bridge, decoration or horizontal overflow check failed');
   const screenshot = `${page}-${width}x${height}.png`;
   fs.writeFileSync(path.join(output, screenshot), (await win.webContents.capturePage()).toPNG());
   report.screenshots.push(screenshot);

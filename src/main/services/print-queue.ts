@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export type PrintJobStatus = 'pending' | 'printing' | 'submitted' | 'failed' | 'cancelled';
+export type PrintJobStatus = 'pending' | 'printing' | 'submitted' | 'simulated' | 'failed' | 'cancelled';
 export type PrintOptionsSnapshot = { printerName: string; paper: 'A4' | 'A5' | 'Letter' | '4x6'; landscape: boolean; copies: number };
 export type PrintJob = { id: string; fileName: string; status: PrintJobStatus; options: PrintOptionsSnapshot; error: string | null; createdAt: string; updatedAt: string };
 type Index = { schemaVersion: 1; jobs: PrintJob[] };
@@ -16,7 +16,7 @@ function validJob(value: unknown): value is PrintJob {
   const job = value as Record<string, unknown>;
   const options = job.options as Record<string, unknown> | null;
   return typeof job.id === 'string' && UUID.test(job.id) && job.fileName === `${job.id}.png`
-    && ['pending', 'printing', 'submitted', 'failed', 'cancelled'].includes(job.status as string)
+    && ['pending', 'printing', 'submitted', 'simulated', 'failed', 'cancelled'].includes(job.status as string)
     && Boolean(options && typeof options.printerName === 'string' && options.printerName.length <= 256
       && ['A4', 'A5', 'Letter', '4x6'].includes(options.paper as string) && typeof options.landscape === 'boolean'
       && Number.isSafeInteger(options.copies) && (options.copies as number) >= 1 && (options.copies as number) <= 10)
