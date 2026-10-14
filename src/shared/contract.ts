@@ -1,4 +1,4 @@
-import type { LicenseSnapshot, Plan } from './license-contract';
+import type { AccountLinkPollResult, AccountLinkStart, LicenseSnapshot, Plan } from './license-contract';
 
 export type Language = 'th' | 'en';
 export type Settings = { language: Language; highContrast: boolean; fullscreen: boolean };
@@ -12,7 +12,8 @@ export type KokoMemorySessionStatus = { state: 'idle' | 'pending' | 'uploading' 
 export type PrintOptionsSnapshot = { printerName: string; paper: 'A4' | 'A5' | 'Letter' | '4x6'; landscape: boolean; copies: number };
 export type PrintJobRecord = { id: string; fileName: string; status: 'pending' | 'printing' | 'submitted' | 'failed' | 'cancelled'; options: PrintOptionsSnapshot; error: string | null; createdAt: string; updatedAt: string };
 export type PrintPrinter = { name: string; displayName: string; description: string };
-export type PhotoStorageStatus = { configured: boolean; directoryName: string | null; photoCount: number; pendingRecovery: number; needsAttention: boolean };
+export const MIN_FREE_PHOTO_STORAGE_BYTES = 256 * 1024 * 1024;
+export type PhotoStorageStatus = { configured: boolean; directoryName: string | null; photoCount: number; pendingRecovery: number; needsAttention: boolean; availableBytes: number | null };
 export type PhotoRecoveryIssue = { kind: 'orphan-photo' | 'incomplete-write' | 'index-temp' | 'missing-photo' | 'invalid-index' | 'storage-unavailable'; id: string | null; token?: string };
 export type SavedPhoto = { id: string; width: number; height: number; byteLength: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type PhotoRecord = SavedPhoto & { fileName: string; mimeType: 'image/jpeg' };
@@ -83,6 +84,9 @@ export type Bridge = {
   getLicensePlans(): Promise<Plan[]>;
   activateLicense(licenseKey: string): Promise<LicenseSnapshot>;
   claimFreeLicense(): Promise<LicenseSnapshot>;
+  beginLicenseAccountLink(): Promise<AccountLinkStart>;
+  pollLicenseAccountLink(): Promise<AccountLinkPollResult>;
+  cancelLicenseAccountLink(): Promise<boolean>;
   deactivateLicense(): Promise<boolean>;
   listEvents(): Promise<{ events: PhotoboothEventWithCount[]; activeEventId: string | null }>;
   createEvent(value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;

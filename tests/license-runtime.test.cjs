@@ -115,3 +115,97 @@ test('rejects a server response signed for another installation', async () => {
   });
   await assert.rejects(runtime.activate('KOKO-REAL-KEY-123'), /signature or device binding is invalid/);
 });
+
+test('browser account linking keeps the poll secret in Main and accepts only a verified entitlement', async () => {
+  const dir = root();
+  const fixedNow = Date.parse('2026-03-01T00:00:00.000Z');
+  const pollCode = 'D'.repeat(43);
+  const expiresAt = new Date(fixedNow + 5 * 60_000).toISOString();
+  let deviceId;
+  let pollCount = 0;
+  const runtime = new LicenseRuntime({
+    userDataPath: dir, apiBaseUrl: 'https://license.example.test', productId: 'koko-photobooth', trustedKeys,
+    now: () => fixedNow,
+    fetcher: async (url, init) => {
+      const body = JSON.parse(init.body || '{}');
+      if (url.endsWith('/v1/desktop/licenses/activate')) {
+        deviceId = body.deviceId;
+        return new Response(JSON.stringify({ entitlement: signed(deviceId, fixedNow) }), { status: 200 });
+      }
+      if (url.endsWith('/v1/desktop/leases/refresh')) {
+        assert.equal(body.deviceId, deviceId);
+        return new Response(JSON.stringify({ entitlement: signed(deviceId, fixedNow) }), { status: 200 });
+      }
+      if (url.endsWith('/v1/desktop/device-authorizations')) {
+        assert.equal(body.deviceId, deviceId);
+        assert.equal(body.productId, 'koko-photobooth');
+        assert.equal(typeof body.entitlement, 'string');
+        return new Response(JSON.stringify({
+          authorizationId: 'authorization-123456', deviceCode: pollCode, userCode: 'A1B2C-3D4E5',
+          verificationUrl: 'https://license.example.test/account/koko-studio/link', expiresAt, pollIntervalSeconds: 5
+        }), { status: 200 });
+      }
+      if (url.endsWith('/v1/desktop/device-authorizations/poll')) {
+        assert.equal(body.authorizationId, 'authorization-123456');
+        assert.equal(body.deviceCode, pollCode);
+        pollCount += 1;
+        if (pollCount === 1) return new Response(JSON.stringify({ error: 'temporarily unavailable' }), { status: 503, headers: { 'retry-after': '7' } });
+        if (pollCount === 2) return new Response(JSON.stringify({ code: 'rate_limited' }), { status: 429, headers: { 'retry-after': '12' } });
+        if (pollCount === 3) return new Response(JSON.stringify({ status: 'pending' }), { status: 200 });
+        return new Response(JSON.stringify({ status: 'approved', entitlement: signed(deviceId, fixedNow) }), { status: 200 });
+      }
+      throw new Error(`Unexpected license route: ${url}`);
+    }
+  });
+
+  await runtime.activate('KOKO-REAL-KEY-123');
+  const link = await runtime.beginAccountLink();
+  assert.deepEqual(link.start, { userCode: 'A1B2C-3D4E5', expiresAt });
+  assert.equal(link.verificationUrl, 'https://license.example.test/account/koko-studio/link');
+  assert.equal(JSON.stringify(link).includes(pollCode), false);
+  assert.equal(JSON.stringify(link).includes('entitlement'), false);
+  assert.deepEqual(await runtime.pollAccountLink(), { status: 'pending', retryAfterSeconds: 7 });
+  assert.deepEqual(await runtime.pollAccountLink(), { status: 'pending', retryAfterSeconds: 12 });
+  assert.deepEqual(await runtime.pollAccountLink(), { status: 'pending' });
+  const approved = await runtime.pollAccountLink();
+  assert.equal(approved.status, 'approved');
+  assert.equal(approved.license.state, 'active');
+  assert.equal(JSON.parse(readFileSync(path.join(dir, 'license-entitlement.json'), 'utf8')).token, signed(deviceId, fixedNow));
+});
+
+test('account linking rejects an untrusted verification origin and never stores an unverified approval', async () => {
+  const dir = root();
+  const fixedNow = Date.parse('2026-03-01T00:00:00.000Z');
+  let deviceId;
+  let maliciousUrl = false;
+  let badApproval = false;
+  const runtime = new LicenseRuntime({
+    userDataPath: dir, apiBaseUrl: 'https://license.example.test', productId: 'koko-photobooth', trustedKeys,
+    now: () => fixedNow,
+    fetcher: async (url, init) => {
+      const body = JSON.parse(init.body || '{}');
+      if (url.endsWith('/v1/desktop/licenses/activate')) {
+        deviceId = body.deviceId;
+        return new Response(JSON.stringify({ entitlement: signed(deviceId, fixedNow) }), { status: 200 });
+      }
+      if (url.endsWith('/v1/desktop/leases/refresh')) return new Response(JSON.stringify({ entitlement: signed(deviceId, fixedNow) }), { status: 200 });
+      if (url.endsWith('/v1/desktop/device-authorizations')) return new Response(JSON.stringify({
+        authorizationId: 'authorization-123456', deviceCode: 'E'.repeat(43), userCode: 'A1B2C-3D4E5',
+        verificationUrl: maliciousUrl ? 'https://attacker.example/account/koko-studio/link' : 'https://license.example.test/account/koko-studio/link',
+        expiresAt: new Date(fixedNow + 5 * 60_000).toISOString()
+      }), { status: 200 });
+      if (url.endsWith('/v1/desktop/device-authorizations/poll')) return new Response(JSON.stringify({ status: 'approved', entitlement: signed(badApproval ? 'other-device' : deviceId, fixedNow) }), { status: 200 });
+      throw new Error(`Unexpected license route: ${url}`);
+    }
+  });
+
+  await runtime.activate('KOKO-REAL-KEY-123');
+  const originalToken = JSON.parse(readFileSync(path.join(dir, 'license-entitlement.json'), 'utf8')).token;
+  maliciousUrl = true;
+  await assert.rejects(runtime.beginAccountLink(), /verification URL is not trusted/);
+  maliciousUrl = false;
+  await runtime.beginAccountLink();
+  badApproval = true;
+  await assert.rejects(runtime.pollAccountLink(), /approved account entitlement could not be verified/);
+  assert.equal(JSON.parse(readFileSync(path.join(dir, 'license-entitlement.json'), 'utf8')).token, originalToken);
+});

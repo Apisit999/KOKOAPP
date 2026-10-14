@@ -42,6 +42,8 @@ export type EntitlementClaims = {
 /** Server-issued compact JWS; the private signing key never leaves the server. */
 export type SignedEntitlement = string;
 
+export type AccountLinkStart = { userCode: string; expiresAt: string };
+export type AccountLinkPollResult = { status: 'pending'; retryAfterSeconds?: number } | { status: 'approved'; license: LicenseSnapshot };
 export type LicenseSnapshot = {
   state: LicenseState;
   checkedAt: string | null;

@@ -1,5 +1,5 @@
 ﻿import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { jpegDimensions } from './jpeg-image.ts';
 
@@ -15,7 +15,7 @@ export type PhotoRecord = {
   eventId?: string;
   importSourceKey?: string;
 };
-export type PhotoStorageStatus = { configured: boolean; directoryName: string | null; photoCount: number; pendingRecovery: number; needsAttention: boolean };
+export type PhotoStorageStatus = { configured: boolean; directoryName: string | null; photoCount: number; pendingRecovery: number; needsAttention: boolean; availableBytes: number | null };
 export type PhotoRecoveryIssue = { kind: 'orphan-photo' | 'incomplete-write' | 'index-temp' | 'missing-photo' | 'invalid-index' | 'storage-unavailable'; id: string | null; token?: string };
 export type IndexRecoveryCandidate = { id: string; width: number; height: number; bytes: Uint8Array };
 type PhotoIndex = { schemaVersion: 1; photos: PhotoRecord[] };
@@ -232,7 +232,8 @@ export class PhotoStore {
   }
 
   getStatus(configured: boolean): PhotoStorageStatus {
-    if (!configured) return { configured: false, directoryName: null, photoCount: 0, pendingRecovery: 0, needsAttention: false };
+    if (!configured) return { configured: false, directoryName: null, photoCount: 0, pendingRecovery: 0, needsAttention: false, availableBytes: null };
+    const availableBytes = this.getAvailableBytes();
     try {
       this.assertPhotoDirectory();
       const index = this.readIndex();
@@ -243,10 +244,18 @@ export class PhotoStore {
       const indexTemps = readdirSync(this.root).filter(name => name.startsWith(path.basename(this.indexPath) + '.') && name.endsWith('.tmp')).length;
       const pendingRecovery = orphanPhotos + incompleteWrites + indexTemps;
       const missing = index.photos.filter(photo => !existsSync(path.join(this.photosDirectory, photo.fileName))).length;
-      return { configured: true, directoryName: path.basename(this.root), photoCount: index.photos.length, pendingRecovery, needsAttention: pendingRecovery > 0 || missing > 0 };
+      return { configured: true, directoryName: path.basename(this.root), photoCount: index.photos.length, pendingRecovery, needsAttention: pendingRecovery > 0 || missing > 0, availableBytes };
     } catch {
-      return { configured: true, directoryName: path.basename(this.root), photoCount: 0, pendingRecovery: 0, needsAttention: true };
+      return { configured: true, directoryName: path.basename(this.root), photoCount: 0, pendingRecovery: 0, needsAttention: true, availableBytes };
     }
+  }
+
+  private getAvailableBytes(): number | null {
+    try {
+      const space = statfsSync(this.root);
+      const available = space.bavail * space.bsize;
+      return Number.isFinite(available) && available >= 0 ? available : null;
+    } catch { return null; }
   }
 
   inspectRecovery(): PhotoRecoveryIssue[] {

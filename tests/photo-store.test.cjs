@@ -23,9 +23,13 @@ test('requires a selected directory and initializes an empty manifest', () => {
   const store = new PhotoStore(root);
   store.configure();
   assert.deepEqual(JSON.parse(readFileSync(path.join(root, 'photo-index.json'), 'utf8')), { schemaVersion: 1, photos: [] });
-  assert.deepEqual(store.getStatus(true), {
-    configured: true, directoryName: path.basename(root), photoCount: 0, pendingRecovery: 0, needsAttention: false
+  const status = store.getStatus(true);
+  assert.deepEqual({ ...status, availableBytes: 0 }, {
+    configured: true, directoryName: path.basename(root), photoCount: 0, pendingRecovery: 0, needsAttention: false,
+    availableBytes: 0
   });
+  assert.equal(typeof status.availableBytes, 'number');
+  assert.ok(status.availableBytes >= 0);
   assert.equal(store.getStatus(false).configured, false);
 });
 

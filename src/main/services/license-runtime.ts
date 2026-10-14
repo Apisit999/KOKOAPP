@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { LicenseFeature, LicenseSnapshot, LicenseState, Plan } from '../../shared/license-contract';
+import type { AccountLinkPollResult, AccountLinkStart, LicenseFeature, LicenseSnapshot, LicenseState, Plan } from '../../shared/license-contract';
 import { verifyEntitlement } from './license-verifier.ts';
 
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
@@ -30,6 +30,7 @@ export class LicenseRuntime {
   private readonly fetcher: Fetcher;
   private readonly now: () => number;
   private deviceIdCache: string | null = null;
+  private pendingAccountLink: { authorizationId: string; deviceCode: string; expiresAt: number } | null = null;
 
   constructor(options: RuntimeOptions) {
     this.options = options;
@@ -105,6 +106,77 @@ export class LicenseRuntime {
     return this.fromVerification(result);
   }
 
+  async beginAccountLink(): Promise<{ start: AccountLinkStart; verificationUrl: string }> {
+    if (!this.isConfigured()) throw new Error('License service is not configured');
+    const status = await this.getStatus();
+    if (status.state !== 'active') throw new Error('An online active license is required before linking an account');
+    const entitlement = this.readToken();
+    if (!entitlement) throw new Error('Claim the Free license before linking an account');
+    const response = await this.request('/v1/desktop/device-authorizations', {
+      method: 'POST', body: JSON.stringify({
+        deviceId: this.getDeviceId(), productId: this.options.productId, entitlement, deviceName: 'KOKO Studio Desktop'
+      })
+    });
+    const body: unknown = await this.readJson(response);
+    if (!response.ok || !isObject(body) || typeof body.authorizationId !== 'string'
+      || !/^[A-Za-z0-9_-]{16,128}$/.test(body.authorizationId)
+      || typeof body.deviceCode !== 'string' || !/^[A-Za-z0-9_-]{40,100}$/.test(body.deviceCode)
+      || typeof body.userCode !== 'string' || !/^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(body.userCode)
+      || typeof body.verificationUrl !== 'string' || typeof body.expiresAt !== 'string'
+      || !Number.isFinite(Date.parse(body.expiresAt)) || Date.parse(body.expiresAt) <= this.now()) {
+      throw new Error('The account-link service returned an invalid response');
+    }
+    const verificationUrl = new URL(body.verificationUrl);
+    const apiUrl = new URL(this.options.apiBaseUrl);
+    if (verificationUrl.origin !== apiUrl.origin || verificationUrl.pathname !== '/account/koko-studio/link'
+      || verificationUrl.search || verificationUrl.hash
+      || (verificationUrl.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(verificationUrl.hostname))) {
+      throw new Error('The account verification URL is not trusted');
+    }
+    this.pendingAccountLink = {
+      authorizationId: body.authorizationId, deviceCode: body.deviceCode, expiresAt: Date.parse(body.expiresAt)
+    };
+    return { start: { userCode: body.userCode, expiresAt: body.expiresAt }, verificationUrl: verificationUrl.toString() };
+  }
+
+  async pollAccountLink(): Promise<AccountLinkPollResult> {
+    const pending = this.pendingAccountLink;
+    if (!pending) throw new Error('There is no account link waiting for approval');
+    if (pending.expiresAt <= this.now()) { this.pendingAccountLink = null; throw new Error('The account-link code expired. Start again.'); }
+    const response = await this.request('/v1/desktop/device-authorizations/poll', {
+      method: 'POST', body: JSON.stringify({ authorizationId: pending.authorizationId, deviceCode: pending.deviceCode })
+    });
+    const body: unknown = await this.readJson(response);
+    if (response.status === 429 || (isObject(body) && body.code === 'rate_limited')) {
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(60, Math.ceil(retryAfter)) : 5;
+      return { status: 'pending', retryAfterSeconds };
+    }
+    if ([408, 425].includes(response.status) || response.status >= 500) {
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(60, Math.ceil(retryAfter)) : 5;
+      return { status: 'pending', retryAfterSeconds };
+    }
+    if (response.ok && isObject(body) && body.status === 'pending') return { status: 'pending' };
+    if (!response.ok || !isObject(body) || body.status !== 'approved' || typeof body.entitlement !== 'string') {
+      this.pendingAccountLink = null;
+      throw new Error('Account linking expired or was denied. Start again.');
+    }
+    const result = this.verifyToken(body.entitlement, false);
+    if (result.state !== 'active' || !result.claims) {
+      this.pendingAccountLink = null;
+      throw new Error('The approved account entitlement could not be verified');
+    }
+    this.writeToken(body.entitlement);
+    this.writeLastObserved(this.now());
+    this.pendingAccountLink = null;
+    return { status: 'approved', license: this.fromVerification(result) };
+  }
+
+  cancelAccountLink() {
+    this.pendingAccountLink = null;
+    return true;
+  }
   async claimFreeLicense(): Promise<LicenseSnapshot> {
     if (!this.isConfigured()) throw new Error('License service is not configured');
     const response = await this.request('/v1/desktop/licenses/free/claim', {

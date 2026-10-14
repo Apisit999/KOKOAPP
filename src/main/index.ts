@@ -22,6 +22,12 @@ import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-
 import { PrintQueueStore, type PrintJob, type PrintOptionsSnapshot } from './services/print-queue';
 import { GuestExitPinStore } from './services/guest-exit-pin';
 
+const stagingBuild = process.env.KOKO_BUILD_CHANNEL === 'staging';
+if (stagingBuild) {
+  app.setName('KOKO Studio Staging');
+  app.setPath('userData', path.join(app.getPath('appData'), 'KOKO Studio Staging'));
+}
+
 function handleSquirrelEvent(): boolean {
   if (process.platform !== 'win32') return false;
   const command = process.argv[1];
@@ -44,7 +50,7 @@ function handleSquirrelEvent(): boolean {
 }
 
 if (handleSquirrelEvent()) app.quit();
-if (process.platform === 'win32') app.setAppUserModelId('com.squirrel.KOKOPhotobooth.KOKOPhotobooth');
+if (process.platform === 'win32') app.setAppUserModelId(stagingBuild ? 'com.squirrel.KOKOPhotoboothStaging.KOKOStudioStaging' : 'com.squirrel.KOKOPhotobooth.KOKOPhotobooth');
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 const defaults: Settings = { language: 'th', highContrast: false, fullscreen: false };
@@ -774,6 +780,21 @@ app.on('ready', () => {
       throw error instanceof Error ? error : new Error('Could not activate license');
     }
   });
+  ipcMain.handle('koko:license-link-begin', async event => {
+    trusted(event);
+    const result = await licenses().beginAccountLink();
+    const verificationUrl = new URL(result.verificationUrl);
+    const configuredOrigin = new URL(LICENSE_API_BASE_URL);
+    if (verificationUrl.origin !== configuredOrigin.origin || verificationUrl.pathname !== '/account/koko-studio/link') {
+      licenses().cancelAccountLink();
+      throw new Error('The account verification URL is not trusted');
+    }
+    try { await shell.openExternal(verificationUrl.toString()); }
+    catch (error) { licenses().cancelAccountLink(); throw error; }
+    return result.start;
+  });
+  ipcMain.handle('koko:license-link-poll', event => { trusted(event); return licenses().pollAccountLink(); });
+  ipcMain.handle('koko:license-link-cancel', event => { trusted(event); return licenses().cancelAccountLink(); });
   ipcMain.handle('koko:license-deactivate', async event => { trusted(event); return licenses().deactivate(); });
   ipcMain.handle('koko:begin-capture', async (event, photoCount: unknown, templateValue: unknown, mediaModeValue: unknown) => {
     trusted(event);
