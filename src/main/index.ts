@@ -10,10 +10,12 @@ import { VideoStore } from './services/video-store';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
 import { LicenseRuntime } from './services/license-runtime';
+import { UpdateChecker } from './services/update-checker';
 import { CaptureAuthorizationRegistry } from './services/capture-authorization';
 import { CaptureSessionStore, validateCaptureTemplate } from './services/capture-session-store';
 import { LICENSE_API_BASE_URL, LICENSE_PRODUCT_ID, LICENSE_TRUSTED_KEYS, PHOTO_CLOUD_PUBLIC_BASE_URL } from './license-config';
 import { PhotoCloudClient } from './services/photo-cloud-client';
+import { StudioCloudClient, StudioCloudError } from './services/studio-cloud-client';
 import { retryPendingPhotoCloudUploads, shouldAutomaticallyUploadSession } from './services/photo-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
@@ -87,6 +89,12 @@ function licenses() {
   return licenseRuntime;
 }
 let photoCloudClient: PhotoCloudClient | null = null;
+let studioCloudClient: StudioCloudClient | null = null;
+let updateChecker: UpdateChecker | null = null;
+function updates() {
+  if (!updateChecker) updateChecker = new UpdateChecker({ apiBaseUrl: LICENSE_API_BASE_URL, currentVersion: app.getVersion(), channel: process.env.KOKO_UPDATE_CHANNEL === 'beta' ? 'beta' : 'stable', getDeviceId: () => licenses().getDeviceId() });
+  return updateChecker;
+}
 let kokoMemoryConnections: KokoMemoryConnectionStore | null = null;
 let kokoMemoryQueue: KokoMemorySyncStore | null = null;
 let kokoMemoryClient: KokoMemoryApiClient | null = null;
@@ -199,6 +207,41 @@ function photoCloud() {
   if (!photoCloudClient) photoCloudClient = new PhotoCloudClient(dataDir(), licenses(), PHOTO_CLOUD_PUBLIC_BASE_URL);
   return photoCloudClient;
 }
+function studioCloud() {
+  if (!studioCloudClient) {
+    studioCloudClient = new StudioCloudClient(dataDir(), { call: (route, payload) => licenses().studioCloudCall(route, payload) }, async (url, bytes) => {
+      const response = await fetch(url, { method: 'PUT', headers: { 'content-type': 'image/jpeg' }, body: Buffer.from(bytes), signal: AbortSignal.timeout(120_000) });
+      if (!response.ok) throw new Error('upload_failed');
+    });
+  }
+  return studioCloudClient;
+}
+/** Backs up a confirmed session to the customer's account. Photos stay on this PC first; failures are retried at the next trigger or app start. */
+async function uploadCaptureSessionToStudioCloud(sessionId: string, manual = false) {
+  const session = captureSessions().get(sessionId);
+  if (!session || (!manual && !shouldAutomaticallyUploadSession(session))) return;
+  const root = configuredPhotoRoot();
+  if (!root) return;
+  const event = session.eventId ? events().get(session.eventId) : null;
+  const photoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
+  const photos = photoIds.filter(id => !studioCloud().isUploaded(id)).map(id => ({ id, bytes: getPhotoStore(root).readPhoto(id).bytes }));
+  if (!photos.length) { await studioCloud().ensureShare(session.id).catch(error => log('studio-cloud-share-failed', error, { sessionId })); return; }
+  const result = await studioCloud().uploadSession({ sessionId: session.id, eventId: session.eventId, eventName: event?.name || `Photo session ${new Date(session.createdAt).toLocaleString('en-GB')}`, date: event?.date ?? null, photos });
+  if (result.uploaded) log('studio-cloud-uploaded', undefined, { sessionId, uploaded: result.uploaded });
+  // The guest QR link is created right after the photos are safe in the account; a failure here never undoes the upload.
+  await studioCloud().ensureShare(session.id).catch(error => log('studio-cloud-share-failed', error, { sessionId }));
+}
+/** Plan or account problems that mean "this booth has no account cloud": the older folder-based album can still be tried. */
+const NO_ACCOUNT_CLOUD = ['cloud_unavailable', 'cloud_not_configured', 'license_inactive', 'account_link_required'];
+async function syncSessionToStudioCloud(sessionId: string) {
+  try {
+    await uploadCaptureSessionToStudioCloud(sessionId, true);
+    return await studioCloud().ensureShare(sessionId);
+  } catch (error) {
+    if (error instanceof StudioCloudError && NO_ACCOUNT_CLOUD.includes(error.code)) return undefined;
+    throw error;
+  }
+}
 async function uploadCaptureSessionToCloud(sessionId: string) {
   const session = captureSessions().get(sessionId);
   if (!session || !shouldAutomaticallyUploadSession(session)) return;
@@ -248,6 +291,8 @@ function recoverPendingPhotoCloudUploads() {
   try {
     const sessions = captureSessions().listForCloudRecovery();
     if (!sessions.length) return;
+    // Account backup resumes interrupted sessions one by one; permanent refusals (quota, plan) are logged and not looped.
+    void (async () => { for (const item of sessions) { try { await uploadCaptureSessionToStudioCloud(item.id); } catch (error) { log('studio-cloud-recovery-failed', error, { sessionId: item.id }); if ((error as { permanent?: boolean }).permanent) break; } } })();
     void retryPendingPhotoCloudUploads(
       sessions,
       photoCloud(),
@@ -762,6 +807,16 @@ app.on('ready', () => {
   });
   ipcMain.handle('koko:license-status', async event => { trusted(event); return licenses().getStatus(); });
   ipcMain.handle('koko:license-plans', async event => { trusted(event); return licenses().getPlans(); });
+  ipcMain.handle('koko:update-check', async event => { trusted(event); return updates().check(); });
+  ipcMain.handle('koko:update-status', event => { trusted(event); return updates().getLast(); });
+  ipcMain.handle('koko:update-open-download', async event => {
+    trusted(event);
+    // The URL comes from the verified server answer kept in Main, never from the renderer.
+    const url = updates().getDownloadUrl();
+    if (!url) return false;
+    await shell.openExternal(url);
+    return true;
+  });
   ipcMain.handle('koko:license-free-claim', async event => {
     trusted(event);
     const result = await licenses().claimFreeLicense();
@@ -872,13 +927,24 @@ app.on('ready', () => {
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
     const session = captureSessions().get(sessionId);
     if (!session) throw new Error('Capture session not found');
+    const accountRoot = configuredPhotoRoot();
+    if (!accountRoot) throw new Error('Choose a photo storage folder before uploading photos');
+    // Account cloud first: photos go to the customer's account and the guest gets a link to only this session.
+    const accountShare = await syncSessionToStudioCloud(session.id);
+    if (accountShare !== undefined) {
+      const accountPhotoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
+      const uploadedNow = accountPhotoIds.filter(id => studioCloud().isUploaded(id)).length;
+      const videoCount = (session.videoIds ?? []).length;
+      if (!event.sender.isDestroyed()) event.sender.send('koko:photo-cloud-progress', { sessionId: session.id, completed: accountPhotoIds.length + videoCount, total: accountPhotoIds.length + videoCount, uploadedCount: uploadedNow });
+      // Videos are not stored in the account yet, so they count as not uploaded instead of pretending to be done.
+      return { shareUrl: accountShare?.url ?? null, uploadedCount: uploadedNow, mediaCount: accountPhotoIds.length + videoCount, photoCount: accountPhotoIds.length, videoCount };
+    }
     let shareUrl = photoCloud().getShareUrl(session.id);
     if (!shareUrl) {
       const eventName = session.eventId ? events().get(session.eventId)?.name : null;
       shareUrl = await photoCloud().createForSession(session.id, eventName || `Photo session ${new Date(session.createdAt).toLocaleString('en-GB')}`);
     }
-    const root = configuredPhotoRoot();
-    if (!root) throw new Error('Choose a photo storage folder before uploading photos');
+    const root = accountRoot;
     const videoIds = session.videoIds ?? [];
     const photoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
     const mediaCount = photoIds.length + videoIds.length;
@@ -913,18 +979,23 @@ app.on('ready', () => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
     if (!captureSessions().get(sessionId)) return null;
+    const accountShare = studioCloud().getShare(sessionId);
+    if (accountShare) return accountShare.revoked ? null : accountShare.url;
     return photoCloud().getShareUrl(sessionId);
   });
   ipcMain.handle('koko:photo-cloud-status', (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
     if (!captureSessions().get(sessionId)) return { shareUrl: null, revoked: false };
+    const accountShare = studioCloud().getShare(sessionId);
+    if (accountShare) return { shareUrl: accountShare.revoked ? null : accountShare.url, revoked: accountShare.revoked, expiresAt: accountShare.expiresAt };
     return photoCloud().getShareStatus(sessionId);
   });
   ipcMain.handle('koko:photo-cloud-revoke', async (event, sessionId: unknown) => {
     trusted(event);
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
     if (!captureSessions().get(sessionId)) throw new Error('Capture session not found');
+    if (studioCloud().getShare(sessionId)) return studioCloud().revokeShare(sessionId);
     return photoCloud().revokeShareForSession(sessionId);
   });
   ipcMain.handle('koko:choose-photo-storage', async event => {
@@ -974,6 +1045,7 @@ app.on('ready', () => {
     captureSessions().addPhoto(sessionId, photo.id);
     const cloudUploaded = photoCloud().getUploadedPhotoIds(sessionId).includes(photo.id);
     void uploadCaptureSessionToCloud(sessionId).catch(error => log('photo-cloud-upload-failed', error, { photoId: photo.id, sessionId }));
+    void uploadCaptureSessionToStudioCloud(sessionId).catch(error => log('studio-cloud-upload-failed', error, { sessionId }));
     log('photo-saved', undefined, { byteLength: photo.byteLength, width, height });
     captureAuthorizations.complete(authorizationId);
     return { id: photo.id, width, height, byteLength: photo.byteLength, sha256: photo.sha256, savedAt: photo.savedAt, cloudUploaded, ...(photo.eventId ? { eventId: photo.eventId } : {}) };
@@ -1017,6 +1089,7 @@ app.on('ready', () => {
       captureSessions().addVideo(sessionId, video.id);
       const cloudUploaded = photoCloud().getUploadedVideoIds(sessionId).includes(video.id);
       void uploadCaptureSessionToCloud(sessionId).catch(error => log('video-cloud-upload-failed', error, { videoId: video.id, sessionId }));
+      void uploadCaptureSessionToStudioCloud(sessionId).catch(error => log('studio-cloud-upload-failed', error, { sessionId }));
       log('video-saved', undefined, { byteLength: video.byteLength, width: video.width, height: video.height, durationMs: video.durationMs });
       captureAuthorizations.complete(authorizationId);
       return { id: video.id, width: video.width, height: video.height, byteLength: video.byteLength, durationMs: video.durationMs,

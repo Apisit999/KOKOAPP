@@ -1,12 +1,13 @@
 {
   "name": "koko-photobooth",
   "productName": "KOKO Studio",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "description": "KOKO Studio event photo booth",
   "author": "KOKO",
   "main": ".vite/build/main.cjs",
   "scripts": {
     "start": "electron-forge start",
+    "start:website-local": "node scripts/start-website-local.cjs",
     "typecheck": "tsc --noEmit",
     "test:storage": "node --test tests/photo-store.test.cjs",
     "test:video-storage": "node --test tests/video-store.test.cjs",
@@ -34,7 +35,10 @@
     "test:koko-memory-client": "node --test tests/koko-memory-client.test.cjs",
     "test:koko-memory-connection-store": "node --test tests/koko-memory-connection-store.test.cjs",
     "test:koko-memory-sync-store": "node --test tests/koko-memory-sync-store.test.cjs",
-    "test:print-queue": "node --test tests/print-queue.test.cjs"
+    "test:print-queue": "node --test tests/print-queue.test.cjs",
+    "test:update": "node --test tests/update-checker.test.cjs",
+    "test:printer-readiness": "node --test tests/printer-readiness.test.cjs",
+    "test:studio-cloud": "node --test tests/studio-cloud-client.test.cjs"
   },
   "dependencies": {
     "@fontsource/cormorant-garamond": "5.3.0",

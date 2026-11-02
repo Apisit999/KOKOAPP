@@ -759,3 +759,9 @@ button { -webkit-tap-highlight-color: transparent }
 .guest-exit-copy form { display:grid; gap:12px; }
 .guest-exit-error { margin:0; color:var(--gold-light); font-size:11px; }
 .guest-exit-dialog .guest-pin-actions { margin-top:8px; }
+
+.update-banner { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin: 0 0 20px; padding: 14px 18px; border-radius: 14px; background: #fff7d6; color: #3b2f00; border: 1px solid #f0d77a; }
+.update-banner.mandatory { background: #ffe5e9; color: #5c0b1a; border-color: #f2a3b0; }
+.update-banner ul { margin: 6px 0 0; padding-left: 18px; }
+.update-banner small { display: block; margin-top: 6px; opacity: .8; }
+.update-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }

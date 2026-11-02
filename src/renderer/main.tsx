@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { printerReadiness } from '../shared/printer-readiness';
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
 import { MIN_FREE_PHOTO_STORAGE_BYTES } from '../shared/contract';
@@ -7,14 +8,18 @@ import type { LicenseSnapshot, Plan } from '../shared/license-contract';
 import { BrowserCameraAdapter, CameraError, CameraManager, type CameraDevice, type CameraStatus } from './camera/camera-adapter';
 import { waitForCaptureDelay } from './camera/capture-delay';
 import { Icon } from './icons';
+import { SimulatedCameraAdapter } from './camera/simulated-camera-adapter';
 import { AccountLinkCard } from './account-link-card';
+import { UpdateBanner } from './update-banner';
 import { TemplatesPage, drawComposition } from './templates';
 import { loadGuestTemplate, type GuestTemplate } from './templates';
 import { EventsPage } from './events';
 import { normalizedRectToPixels } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers } from './template-layers';
 
-const cameraManager = new CameraManager(new BrowserCameraAdapter());
+// Developer/QA switch: open the app with `?camera=simulated` to run the capture flow without a camera.
+const useSimulatedCamera = new URLSearchParams(window.location.search).get('camera') === 'simulated';
+const cameraManager = new CameraManager(useSimulatedCamera ? new SimulatedCameraAdapter() : new BrowserCameraAdapter());
 function hasLowPhotoStorage(bytes: number | null | undefined) { return typeof bytes === 'number' && bytes < MIN_FREE_PHOTO_STORAGE_BYTES; }
 function formatStorageSpace(bytes: number) { return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`; }
 
@@ -840,6 +845,8 @@ function App() {
   const exitPinInputRef = useRef<HTMLInputElement | null>(null);
   const [page, setPage] = useState('studio');
   const [deviceDiagnostics, setDeviceDiagnostics] = useState(false);
+  const [printerCount, setPrinterCount] = useState<number | null>(null);
+  useEffect(() => { void window.koko.listPrintPrinters().then(list => setPrinterCount(list.length)).catch(() => setPrinterCount(null)); }, [page]);
   const [message, setMessage] = useState('');
   const [photoStorage, setPhotoStorage] = useState<PhotoStorageStatus | null>(null);
   const [recoveryIssues, setRecoveryIssues] = useState<PhotoRecoveryIssue[]>([]);
@@ -1217,7 +1224,7 @@ function App() {
     { title: th ? 'เทมเพลต KOKO' : 'KOKO template', detail: guestTemplate ? guestTemplate.name : (th ? 'เลือกกรอบและรูปแบบสำหรับงานนี้' : 'Choose the frame and layout for this event.'), state: guestTemplate ? 'ready' : 'todo', action: guestTemplate ? (th ? 'แก้ไข' : 'Edit') : (th ? 'เลือกเทมเพลต' : 'Choose template'), onClick: () => go('templates') },
     { title: th ? 'อัลบั้มและ QR' : 'Album & QR', detail: license?.state === 'active' ? (th ? 'License พร้อมสร้างลิงก์หลังอัปโหลดจบรอบ' : 'License is active; the link is created after upload.') : (th ? 'ต้องเชื่อมต่อ License ก่อนอัปโหลดอัลบั้ม' : 'An active license is needed to upload albums.'), state: license?.state === 'active' ? 'ready' : 'todo', action: license?.state === 'active' ? (th ? 'ดูบัญชี' : 'Account') : (th ? 'เชื่อม License' : 'Connect license'), onClick: () => go('account') },
     { title: th ? 'หน้าจอแขก' : 'Guest display', detail: guestDisplayActive ? (th ? 'กำลังแสดงบนจอที่สอง' : 'Showing on the second display.') : availableGuestDisplays.length ? (th ? 'พบจอที่สอง เปิดใช้ได้ตามต้องการ' : 'A second display is available when needed.') : (th ? 'ต่อจอที่สองเมื่ออยากแสดงภาพแยกให้แขก' : 'Connect a second screen when you want a separate guest view.'), state: guestDisplayActive ? 'ready' : 'optional', action: guestDisplayActive ? (th ? 'เปิดจออีกครั้ง' : 'Focus display') : (th ? 'เปิดจอแขก' : 'Open display'), onClick: () => void openGuestDisplay() },
-    { title: th ? 'จัดภาพและพิมพ์' : 'Compose & print', detail: th ? 'เลือกภาพ จัดวาง แล้วเปิดกล่องพิมพ์ของ Windows' : 'Arrange photos and open the system print dialog.', state: 'optional', action: th ? 'เปิดการพิมพ์' : 'Print setup', onClick: () => go('printing') }
+    { title: th ? 'จัดภาพและพิมพ์' : 'Compose & print', detail: (th ? 'เลือกภาพ จัดวาง แล้วพิมพ์ · ' : 'Arrange photos, then print. ') + (th ? printerReadiness(printerCount).detail.th : printerReadiness(printerCount).detail.en), state: printerReadiness(printerCount).state, action: th ? 'เปิดการพิมพ์' : 'Print setup', onClick: () => go('printing') }
   ];
   const requiredFeature = page === 'studio' ? 'capture' : page === 'printing' ? 'printing' : null;
   const hasRequiredFeature = requiredFeature !== null && license?.features.includes(requiredFeature);
@@ -1232,7 +1239,7 @@ function App() {
         <div className="sidebar-bottom"><div className="sidebar-license"><span className={`license-dot ${license?.state === 'active' || license?.state === 'offline_grace' ? 'good' : ''}`} /><span>{licenseLoading ? (th ? 'กำลังตรวจสอบ License' : 'Checking license') : license?.state === 'active' ? (th ? 'License ใช้งานได้' : 'License active') : license?.state === 'offline_grace' ? 'Offline grace' : (th ? 'License ไม่ได้เชื่อมต่อ' : 'License not active')}</span></div><button className={`sidebar-account ${page === 'account' ? 'active' : ''}`} onClick={() => go('account')} title={th ? 'บัญชีและ License' : 'Account & License'}><span className="nav-icon"><Icon name="user" size={17} /></span><span>{th ? 'บัญชีและ License' : 'Account & License'}</span><Icon name="chevron" size={14} /></button><div className="edition-meta"><span>{license?.state === 'active' ? 'LICENSED EDITION' : 'DESKTOP EDITION'}</span><small>v{status?.version ?? '…'}</small></div></div>
       </aside>
       <div className="workspace"><header className="topbar"><div className="topbar-title"><span className="crumb">KOKO</span><span className="crumb-sep">/</span><span>{pageName}</span></div><div className="topbar-actions"><span className={`camera-top-status ${cameraState === 'ready' ? 'good' : ''}`}><i />{cameraState === 'ready' ? 'LIVE' : statusLabel[cameraState]}</span><button className="topbar-settings" onClick={() => go('settings')} title={th ? 'ตั้งค่า' : 'Settings'} aria-label={th ? 'ตั้งค่า' : 'Settings'}><Icon name="settings" size={18} /></button><button className="topbar-account" onClick={() => go('account')}><Icon name="user" size={17} />{th ? 'บัญชี' : 'Account'}</button><span className={`license-chip ${license?.state === 'active' || license?.state === 'offline_grace' ? 'is-active' : ''}`}><span />{licenseLoading ? (th ? 'กำลังตรวจสอบ' : 'Checking') : license?.state === 'active' ? 'ACTIVE' : license?.state === 'offline_grace' ? 'OFFLINE GRACE' : license?.state === 'expired' ? 'EXPIRED' : license?.state === 'revoked' ? 'REVOKED' : license?.state === 'device_limit' ? 'DEVICE LIMIT' : 'UNLICENSED'}</span></div></header>
-        <main className={`page-content ${page === 'studio' ? 'studio-page' : ''}`}>{page === 'dashboard' ? <>
+        <main className={`page-content ${page === 'studio' ? 'studio-page' : ''}`}><UpdateBanner th={th} />{page === 'dashboard' ? <>
           <div className="welcome-row"><div><p className="eyebrow">{th ? 'ยินดีต้อนรับสู่ KOKO' : 'WELCOME TO KOKO'}</p><h1>{th ? 'พร้อมสร้างช่วงเวลาพิเศษหรือยัง?' : 'Ready to make something memorable?'}</h1><p className="lead">{th ? 'ตั้งค่าพื้นฐานให้พร้อม แล้วเริ่มต้นเซสชันถ่ายภาพของคุณ' : 'Get your setup ready and start a new photo session.'}</p></div><div className="welcome-actions"><button className="camera-secondary" onClick={() => void guest()}>{th ? 'เริ่มโหมดแขก' : 'Start Guest mode'}</button><button className="primary start-button" onClick={() => go('studio')}><span>＋</span>{th ? 'เริ่มเซสชัน' : 'Start Session'}<span>→</span></button></div></div>
           <section className="dashboard-cards"><article className="summary-card camera-summary"><div className="card-heading"><div><span className="card-icon pink">◎</span><span><small>{th ? 'สถานะอุปกรณ์' : 'DEVICE STATUS'}</small><h2>{th ? 'กล้อง' : 'Camera'}</h2></span></div><span className={`status-dot ${cameraState === 'ready' || cameraState === 'detected' ? 'good' : ''}`}>{statusLabel[cameraState]}</span></div><p>{cameraState === 'ready' ? (th ? 'กล้องพร้อมแล้ว ดูภาพตัวอย่างได้ในการตรวจสอบอุปกรณ์' : 'Camera is ready. Open diagnostics to preview it.') : (th ? 'เชื่อมต่อกล้องก่อนเริ่มใช้งาน' : 'Connect a camera before starting a session.')}</p><button className="text-link" onClick={() => { setDeviceDiagnostics(true); go('settings'); }}>{th ? 'ตรวจสอบอุปกรณ์' : 'Device Diagnostics'} <span>→</span></button></article>
           <article className="summary-card license-summary"><div className="card-heading"><div><span className="card-icon violet">✦</span><span><small>{th ? 'บัญชีของคุณ' : 'YOUR ACCOUNT'}</small><h2>{th ? 'สถานะ License' : 'License status'}</h2></span></div><span className={`status-dot ${license?.state === 'active' ? 'good' : 'neutral'}`}>{licenseLoading ? (th ? 'กำลังตรวจสอบ' : 'Checking') : license?.state === 'active' ? (th ? 'ใช้งานได้' : 'Active') : license?.state === 'offline_grace' ? (th ? 'Offline Grace' : 'Offline grace') : license?.state === 'expired' ? (th ? 'หมดอายุ' : 'Expired') : license?.state === 'device_limit' ? (th ? 'เกินจำนวนเครื่อง' : 'Device limit') : license?.state === 'revoked' ? (th ? 'ถูกเพิกถอน' : 'Revoked') : (th ? 'ตรวจสอบไม่ได้' : 'Unverified')}</span></div><p>{license?.state === 'active' ? (th ? 'ตรวจสอบ License กับบริการแล้ว' : 'License was verified with the service.') : license?.state === 'offline_grace' ? (th ? `ใช้งานในเครื่องได้ถึง ${license.offlineUntil ?? '—'}` : `Local use allowed until ${license.offlineUntil ?? '—'}`) : (th ? 'ยังยืนยันสิทธิ์จากบริการ License ไม่ได้' : 'Entitlement cannot currently be verified by the licensing service.')}</p><button className="text-link" onClick={() => go('account')}>{th ? 'ดูบัญชีและ License' : 'Account & license'} <span>→</span></button></article>

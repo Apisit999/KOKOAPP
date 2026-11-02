@@ -1,4 +1,5 @@
 import type { AccountLinkPollResult, AccountLinkStart, LicenseSnapshot, Plan } from './license-contract';
+import type { UpdateStatus } from './update-contract';
 
 export type Language = 'th' | 'en';
 export type Settings = { language: Language; highContrast: boolean; fullscreen: boolean };
@@ -82,6 +83,9 @@ export type Bridge = {
   deletePhoto(id: string): Promise<boolean>;
   getLicenseStatus(): Promise<LicenseSnapshot>;
   getLicensePlans(): Promise<Plan[]>;
+  checkForUpdates(): Promise<UpdateStatus>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  openUpdateDownload(): Promise<boolean>;
   activateLicense(licenseKey: string): Promise<LicenseSnapshot>;
   claimFreeLicense(): Promise<LicenseSnapshot>;
   beginLicenseAccountLink(): Promise<AccountLinkStart>;

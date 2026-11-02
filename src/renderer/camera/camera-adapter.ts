@@ -1,7 +1,7 @@
 export type CameraDevice = { deviceId: string; label: string };
 export type StillCaptureMode = 'none' | 'video-frame' | 'camera-original' | 'file-import';
 export type CameraCapabilities = {
-  sourceKind: 'video-input' | 'phone-network' | 'camera-sdk' | 'folder';
+  sourceKind: 'video-input' | 'phone-network' | 'camera-sdk' | 'folder' | 'simulated';
   livePreview: boolean;
   stillCapture: StillCaptureMode;
   remoteShutter: boolean;

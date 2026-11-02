@@ -86,3 +86,14 @@ test('preview and still capture reject streams that are no longer active', async
   await assert.rejects(manager.startPreview({}, stream), CameraError);
   await assert.rejects(manager.captureStill({}, stream), CameraError);
 });
+
+test('simulated camera adapter declares itself as simulated and rejects other device ids', async () => {
+  const { SimulatedCameraAdapter, SIMULATED_CAMERA_ID } = require('../src/renderer/camera/simulated-camera-adapter.ts');
+  const adapter = new SimulatedCameraAdapter();
+  assert.equal(adapter.capabilities.sourceKind, 'simulated');
+  assert.equal(adapter.capabilities.remoteShutter, false);
+  const devices = await adapter.enumerateDevices();
+  assert.equal(devices[0].deviceId, SIMULATED_CAMERA_ID);
+  assert.match(devices[0].label, /not real hardware/);
+  await assert.rejects(adapter.connect('some-real-camera'), error => error.code === 'not-found');
+});

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PERMANENT_CLOUD_CODES, StudioCloudError } from './studio-cloud-client.ts';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountLinkPollResult, AccountLinkStart, LicenseFeature, LicenseSnapshot, LicenseState, Plan } from '../../shared/license-contract';
@@ -235,6 +236,23 @@ export class LicenseRuntime {
     return { id: body.id, ownerKey: body.ownerKey, shareKey: body.shareKey, label: body.label, createdAt: body.createdAt, expiresAt: body.expiresAt };
   }
 
+  /** Account cloud storage on the KOKO website. Adds device, product and the signed entitlement; the server decides ownership and quota. */
+  async studioCloudCall(route: string, payload: Record<string, unknown>): Promise<unknown> {
+    if (!this.isConfigured()) throw new StudioCloudError('cloud_not_configured', true);
+    const status = await this.getStatus();
+    if (status.state !== 'active') throw new StudioCloudError('license_inactive', true);
+    if (!status.features.includes('cloud_sync')) throw new StudioCloudError('cloud_unavailable', true);
+    const entitlement = this.readToken();
+    const response = await this.request(route, { method: 'POST', body: JSON.stringify({ ...payload, deviceId: this.getDeviceId(), productId: this.options.productId, entitlement }) });
+    const body: unknown = await this.readJson(response);
+    if (!response.ok) {
+      const code = isObject(body) && typeof body.code === 'string' ? body.code : 'server_error';
+      // 4xx answers will not change by retrying; 5xx and 429 are temporary.
+      throw new StudioCloudError(code, PERMANENT_CLOUD_CODES.includes(code));
+    }
+    return body;
+  }
+
   async uploadPhoto(folderId: string, photoId: string, ownerKey: string, jpegBytes: Uint8Array): Promise<void> {
     if (!this.isConfigured()) throw new Error('Photo cloud service is not configured');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(folderId)
@@ -348,7 +366,7 @@ export class LicenseRuntime {
     return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   }
 
-  private getDeviceId(): string {
+  getDeviceId(): string {
     if (this.deviceIdCache) return this.deviceIdCache;
     mkdirSync(this.options.userDataPath, { recursive: true });
     try {
