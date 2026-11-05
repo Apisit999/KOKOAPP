@@ -26,3 +26,16 @@ Use representative fixtures and independent expected results, especially for tem
 ## Release gates
 
 Before any real event, pass: installer and rollback check; supported camera and storage write/free-space check; 100+ consecutive capture rehearsal or a sample matching expected event load; restart during save/queue; offline capture and reconnect; integrity scan; event/album correctness and guest access test; operator recovery drill; backup/restore sample; privacy/consent sign-off. Record failed cases and owners. Printing and direct DSLR gates apply only if those features are enabled.
+
+## Hardware-free session check (simulated camera and printer)
+
+`scripts/verify-simulated-session.cjs` drives the packaged app through the real UI: Free claim, storage, event, capture with the simulated camera, review, Finish round, simulated print, then a second launch on the same profile to confirm the session, photo, print job and license are recovered. It proves the software path only; it does not prove any physical camera or printer.
+
+License settings are compiled into the package, so build a throwaway QA package against a local License Server first:
+
+1. Create keys outside the repository: run `node scripts/generate-license-keys.cjs` from a scratch directory.
+2. Start the server: `LICENSE_PRIVATE_KEY_FILE=<scratch>/secrets/license-private.pem LICENSE_DB_PATH=<scratch>/lic.sqlite LICENSE_KEY_ID=koko-local-dev-1 node server/license-server.cjs`.
+3. Package with `KOKO_LICENSE_API_BASE_URL=http://127.0.0.1:8787`, `KOKO_LICENSE_PRODUCT_ID=koko-photobooth` and `KOKO_LICENSE_TRUSTED_KEYS_JSON={"koko-local-dev-1":"<public key PEM>"}` set, then run `npx electron scripts/verify-simulated-session.cjs "out/KOKO Studio-win32-x64/resources/app.asar" artifacts/sim first` and again with `second`. Keep `KOKO_LICENSE_API_BASE_URL` set when running it.
+4. Stop the server and rebuild without those variables before distributing anything; the QA package must never be shipped.
+
+Result on 2026-11-05 (0.1.29 plus UI changes): both phases passed with no renderer errors.

@@ -1,0 +1,106 @@
+// Hardware-free end-to-end check of the packaged app: Free claim -> storage -> event -> capture with the
+// simulated camera through the real UI -> confirm -> composition input -> simulated print -> restart recovery.
+// Requires a local License Server (npm run license:server) and KOKO_LICENSE_* env vars; see docs/TEST_PLAN.md.
+// Usage: electron scripts/verify-simulated-session.cjs <app.asar> <artifact-directory> <first|second>
+const { app, dialog } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const [archiveArg, outputArg, phase = 'first'] = process.argv.slice(2);
+if (!archiveArg || !outputArg) throw new Error('Usage: electron scripts/verify-simulated-session.cjs <app.asar> <artifact-directory> <first|second>');
+const archive = path.resolve(archiveArg);
+const output = path.resolve(outputArg);
+const storageDir = path.join(output, 'photos');
+fs.mkdirSync(storageDir, { recursive: true });
+app.setPath('userData', path.join(output, 'profile'));
+dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [storageDir] });
+const report = { phase, steps: [], rendererErrors: [] };
+let started = false;
+let stage = 'startup';
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const evaluate = (win, js) => win.webContents.executeJavaScript(js);
+async function waitFor(win, js, label, timeout = 15000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (await evaluate(win, js)) return;
+    await wait(200);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+const clickButton = (win, scope, text) => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll(${JSON.stringify(scope)})).find(x => x.textContent.trim() === ${JSON.stringify(text)}); if (b) b.click(); return Boolean(b); })()`);
+const step = (name, data) => report.steps.push({ name, ...data });
+const shot = async (win, name) => fs.writeFileSync(path.join(output, `${name}.png`), (await win.webContents.capturePage()).toPNG());
+
+app.on('browser-window-created', (_event, win) => {
+  if (started) return;
+  started = true;
+  win.webContents.on('console-message', (_event, details) => { if (details?.level === 'error') report.rendererErrors.push(details.message); });
+  win.webContents.once('did-finish-load', async () => {
+    try {
+      const html = path.join(archive, '.vite', 'renderer', 'main_window', 'index.html');
+      if (phase === 'first') {
+        stage = 'setup';
+        await evaluate(win, `window.koko.saveSettings({ language: 'en', highContrast: false, fullscreen: false })`);
+        const license = await evaluate(win, `window.koko.claimFreeLicense()`);
+        step('free-claim', { state: license.state, features: license.features });
+        if (license.state !== 'active' || !license.features.includes('capture')) throw new Error('Free claim did not grant capture');
+        const storage = await evaluate(win, `window.koko.choosePhotoStorage()`);
+        step('storage', { configured: storage.configured });
+        const event = await evaluate(win, `window.koko.createEvent({ name: 'Simulated QA event', date: null, notes: '' })`);
+        await evaluate(win, `window.koko.setActiveEvent(${JSON.stringify(event.id)})`);
+        step('event', { id: event.id });
+        stage = 'reload with simulated camera';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        stage = 'camera ready';
+        await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Start live preview')`, 'preview button', 15000);
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled)`, 'capture button enabled', 20000);
+        await shot(win, 'capture-ready');
+        step('camera-ready', { simulated: true });
+        stage = 'capture';
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Finish round')`, 'review screen', 30000);
+        await shot(win, 'review');
+        step('review-shown', {});
+        await clickButton(win, 'button', 'Finish round');
+        await wait(1500);
+        const sessions = await evaluate(win, `window.koko.listCaptureSessions(10, 0)`);
+        const latest = sessions[0];
+        step('session', { count: sessions.length, status: latest?.status, photos: latest?.photoIds?.length });
+        if (!latest || latest.status !== 'confirmed' || latest.photoIds.length < 1) throw new Error('Session was not confirmed with a photo');
+        const status = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+        step('storage-after', { photoCount: status.photoCount });
+        if (status.photoCount < 1) throw new Error('No photo stored');
+        stage = 'simulated print';
+        const png = await evaluate(win, `(async () => { const c = document.createElement('canvas'); c.width = 600; c.height = 400; const x = c.getContext('2d'); x.fillStyle = '#c9a24a'; x.fillRect(0, 0, 600, 400); const blob = await new Promise(r => c.toBlob(r, 'image/png')); return Array.from(new Uint8Array(await blob.arrayBuffer())); })()`);
+        const job = await evaluate(win, `window.koko.submitPrintImage(new Uint8Array(${JSON.stringify(png)}), { printerName: '__koko_simulated_printer__', paper: '4x6', landscape: false, copies: 1 })`);
+        step('print', { status: job.status });
+        if (job.status !== 'simulated') throw new Error(`Simulated print returned status ${job.status}`);
+      } else {
+        stage = 'recovery after restart';
+        const sessions = await evaluate(win, `window.koko.listCaptureSessions(10, 0)`);
+        const status = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+        const jobs = await evaluate(win, `window.koko.listPrintJobs()`);
+        const license = await evaluate(win, `window.koko.getLicenseStatus ? window.koko.getLicenseStatus() : null`);
+        step('after-restart', { sessions: sessions.length, latestStatus: sessions[0]?.status, photos: status.photoCount, pendingRecovery: status.pendingRecovery, printJobs: jobs.length, printStatus: jobs[0]?.status, license: license?.state });
+        if (!sessions.length || sessions[0].status !== 'confirmed' || status.photoCount < 1 || status.pendingRecovery !== 0 || !jobs.length) throw new Error('State was not recovered after restart');
+      }
+      report.ok = report.rendererErrors.length === 0;
+      finish(report.ok ? 0 : 1);
+    } catch (error) {
+      report.failure = String(error);
+      report.failureStage = stage;
+      try { await shot(win, 'failure'); report.visibleText = (await evaluate(win, `document.body.innerText.slice(0, 600)`)); } catch { /* window may be gone */ }
+      finish(1);
+    }
+  });
+});
+function finish(code) {
+  fs.writeFileSync(path.join(output, `report-${phase}.json`), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+  app.exit(code);
+}
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, 90000).unref();
+require(path.join(archive, '.vite', 'build', 'main.cjs'));
