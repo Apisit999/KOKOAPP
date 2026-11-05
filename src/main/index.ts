@@ -890,8 +890,8 @@ app.on('ready', () => {
   });
   ipcMain.handle('koko:capture-session-finish', (event, sessionId: unknown, nextStatus: unknown) => {
     trusted(event);
-    if (typeof sessionId !== 'string' || !['review', 'confirmed', 'retaken'].includes(nextStatus as string)) throw new Error('Invalid capture session update');
-    return captureSessions().finish(sessionId, nextStatus as 'review' | 'confirmed' | 'retaken');
+    if (typeof sessionId !== 'string' || !['review', 'confirmed', 'cancelled', 'retaken'].includes(nextStatus as string)) throw new Error('Invalid capture session update');
+    return captureSessions().finish(sessionId, nextStatus as 'review' | 'confirmed' | 'cancelled' | 'retaken');
   });
   ipcMain.handle('koko:memory-status', event => { trusted(event); return memoryConnections().getStatus(); });
   ipcMain.handle('koko:memory-import-config', async event => {
@@ -949,6 +949,11 @@ app.on('ready', () => {
       if (!event.sender.isDestroyed()) event.sender.send('koko:photo-cloud-progress', { sessionId: session.id, completed: accountPhotoIds.length + videoCount, total: accountPhotoIds.length + videoCount, uploadedCount: uploadedNow });
       // Videos are not stored in the account yet, so they count as not uploaded instead of pretending to be done.
       return { shareUrl: accountShare?.url ?? null, uploadedCount: uploadedNow, mediaCount: accountPhotoIds.length + videoCount, photoCount: accountPhotoIds.length, videoCount };
+    }
+    // The Free plan has no cloud albums. Say so instead of attempting an upload that is bound to be rejected.
+    const cloudLicense = await licenses().getStatus().catch(() => null);
+    if (cloudLicense && !cloudLicense.features.includes('cloud_sync')) {
+      return { shareUrl: null, uploadedCount: 0, mediaCount: 0, photoCount: session.photoIds.length, videoCount: (session.videoIds ?? []).length, cloudAvailable: false };
     }
     let shareUrl = photoCloud().getShareUrl(session.id);
     if (!shareUrl) {

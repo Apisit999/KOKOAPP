@@ -50,6 +50,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   const roundSessionIdRef = useRef('');
   const [roundShareUrl, setRoundShareUrl] = useState('');
   const [roundCloudUploaded, setRoundCloudUploaded] = useState(false);
+  const [cloudUnavailable, setCloudUnavailable] = useState(false);
   const [cloudSyncing, setCloudSyncing] = useState(false);
   const [guestCompositionUrl, setGuestCompositionUrl] = useState('');
   const [shareQrDataUrl, setShareQrDataUrl] = useState('');
@@ -219,6 +220,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     setCaptureNotice('');
     setRoundShareUrl('');
     setRoundCloudUploaded(false);
+    setCloudUnavailable(false);
     setRoundPhotoIds([]);
     setRoundVideoId('');
     setRoundVideoUrl('');
@@ -377,6 +379,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         if (roundSessionIdRef.current !== sessionId) return;
         setRoundShareUrl(result.shareUrl ?? '');
         setRoundCloudUploaded(result.mediaCount > 0 && result.uploadedCount === result.mediaCount);
+        setCloudUnavailable(result.cloudAvailable === false);
       }).catch(() => undefined);
     } catch (error) {
       const reason = controller.signal.aborted
@@ -390,6 +393,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
           if (roundSessionIdRef.current !== sessionId) return;
           setRoundShareUrl(result.shareUrl ?? '');
           setRoundCloudUploaded(result.mediaCount > 0 && result.uploadedCount === result.mediaCount);
+          setCloudUnavailable(result.cloudAvailable === false);
         }).catch(() => undefined);
         setCaptureNotice(th ? `${reason} · บันทึกสื่อแล้ว ${savedPhotoIds.length + (savedVideoId ? 1 : 0)} รายการ` : `${reason} · ${savedPhotoIds.length + (savedVideoId ? 1 : 0)} item(s) saved.`);
       } else {
@@ -425,6 +429,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       setRoundShareUrl(result.shareUrl ?? '');
       const complete = result.mediaCount > 0 && result.uploadedCount === result.mediaCount;
       setRoundCloudUploaded(complete);
+      setCloudUnavailable(result.cloudAvailable === false);
       setCaptureNotice(complete
         ? (th ? 'อัปโหลดภาพและวิดีโอทั้งหมดแล้ว' : 'All photos and videos uploaded')
         : (th ? `อัปโหลดแล้ว ${result.uploadedCount}/${result.mediaCount} ไฟล์` : `Uploaded ${result.uploadedCount}/${result.mediaCount} media files`));
@@ -477,7 +482,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     if (!storageReady) { setCaptureError(th ? 'เลือกโฟลเดอร์เก็บภาพก่อนเริ่มโหมดทดลอง' : 'Choose a photo storage folder before starting the sample session.'); return; }
     if (storageSpaceLow) { setCaptureError(th ? `พื้นที่ว่างน้อยกว่า ${formatStorageSpace(MIN_FREE_PHOTO_STORAGE_BYTES)} กรุณาเพิ่มพื้นที่ก่อนเริ่มถ่าย` : `Free space is below ${formatStorageSpace(MIN_FREE_PHOTO_STORAGE_BYTES)}. Make more room before capturing.`); return; }
     capturingRef.current = true;
-    setCapturing(true); setCaptureError(''); setCaptureNotice(''); setRoundShareUrl(''); setRoundCloudUploaded(false);
+    setCapturing(true); setCaptureError(''); setCaptureNotice(''); setRoundShareUrl(''); setCloudUnavailable(false); setRoundCloudUploaded(false);
     setRoundPhotoIds([]); setRoundVideoId(''); setRoundVideoUrl(''); setGuestCompositionUrl('');
     const template = guestMode ? guestTemplate : null;
     const requestedCount = template?.count ?? photoCount;
@@ -522,7 +527,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       setReviewCount(savedIds.length); setReviewing(true);
       void window.koko.syncPhotoCloudSession(sessionId).then(result => {
         if (roundSessionIdRef.current !== sessionId) return;
-        setRoundShareUrl(result.shareUrl ?? ''); setRoundCloudUploaded(result.mediaCount > 0 && result.uploadedCount === result.mediaCount);
+        setRoundShareUrl(result.shareUrl ?? ''); setRoundCloudUploaded(result.mediaCount > 0 && result.uploadedCount === result.mediaCount); setCloudUnavailable(result.cloudAvailable === false);
       }).catch(() => undefined);
       setCaptureNotice(th ? 'โหมดทดลองใช้ภาพตัวอย่าง ระบบบันทึกภาพลงคลังแล้ว' : 'Sample session complete. The images were saved to your library.');
     } catch (error) {
@@ -575,7 +580,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         </div>
         {guestMode && reviewing && roundVideoUrl && <section className="guest-composition"><video controls playsInline src={roundVideoUrl} aria-label={th ? 'คลิปวิดีโอของคุณ' : 'Your recorded clip'} /><button type="button" className="camera-secondary" onClick={() => roundVideoId && void window.koko.exportVideo(roundVideoId)}>{th ? 'ส่งออกคลิปวิดีโอ' : 'Export video clip'} ↓</button></section>}
         {reviewing ? <div className="capture-feedback review-feedback" role="status"><div><strong>{th ? 'ตรวจสอบผลงานของคุณ' : 'Review your capture'}</strong><span>{th ? `บันทึกแล้ว ${reviewCount} รายการ · ไฟล์ต้นฉบับยังอยู่ในคลัง` : `${reviewCount} item(s) saved · original files stay in the library`}</span></div><div className="review-actions">{roundPhotos[0] && <button type="button" onClick={() => onOpenPhoto?.(roundPhotos[0])}>{th ? 'ดูภาพ' : 'View photo'}</button>}{roundVideoId && <button type="button" onClick={() => void window.koko.exportVideo(roundVideoId)}>{th ? 'บันทึกคลิป' : 'Save clip'}</button>}<button type="button" onClick={() => void retakeRound()}>{captureMode === 'video' ? (th ? 'อัดใหม่' : 'Record again') : (th ? 'ถ่ายใหม่' : 'Retake')}</button><button type="button" className="review-confirm" onClick={() => void confirmRound()}>{th ? 'ยืนยันจบรอบ' : 'Finish round'}</button></div></div> : (captureError || captureNotice || !storageReady) && <div className={`capture-feedback ${captureError ? 'has-error' : ''}`} role={captureError ? 'alert' : 'status'}>{captureError || captureNotice || (th ? 'เลือกโฟลเดอร์จัดเก็บใน Settings ก่อนเริ่ม' : 'Choose a storage folder in Settings before capturing.')}</div>}
-        {reviewing && (roundPhotoIds.length > 0 || roundVideoId) && <div className="photo-cloud-share" role="status">{roundCloudUploaded && roundShareUrl ? <><span>{th ? 'อัปโหลดผลงานรอบนี้ไปยังอัลบั้มส่วนตัวแล้ว' : 'This session is uploaded to its private album.'}</span><button type="button" onClick={() => void copyShareLink()}>{th ? 'คัดลอกลิงก์อัลบั้ม' : 'Copy private album link'} ↗</button>{shareQrDataUrl && <div className="private-album-qr"><img src={shareQrDataUrl} alt={th ? 'QR สำหรับเปิดอัลบั้มส่วนตัว' : 'QR code for this private album'} /><small>{th ? 'สแกนเพื่อดูและดาวน์โหลดภาพ/วิดีโอ' : 'Scan to view and download this session'}</small></div>}</> : <><span>{th ? 'ผลงานอยู่ในเครื่องแล้ว — ยังอัปโหลดไม่ครบ' : 'Media is saved locally; cloud upload is incomplete.'}</span><button type="button" onClick={() => void retryCloudUpload()} disabled={cloudSyncing}>{cloudSyncing ? (th ? 'กำลังอัปโหลด…' : 'Uploading…') : (th ? 'ลองอัปโหลดอีกครั้ง' : 'Retry upload')}</button></>}{captureNotice && <span>{captureNotice}</span>}</div>}
+        {reviewing && (roundPhotoIds.length > 0 || roundVideoId) && <div className="photo-cloud-share" role="status">{roundCloudUploaded && roundShareUrl ? <><span>{th ? 'อัปโหลดผลงานรอบนี้ไปยังอัลบั้มส่วนตัวแล้ว' : 'This session is uploaded to its private album.'}</span><button type="button" onClick={() => void copyShareLink()}>{th ? 'คัดลอกลิงก์อัลบั้ม' : 'Copy private album link'} ↗</button>{shareQrDataUrl && <div className="private-album-qr"><img src={shareQrDataUrl} alt={th ? 'QR สำหรับเปิดอัลบั้มส่วนตัว' : 'QR code for this private album'} /><small>{th ? 'สแกนเพื่อดูและดาวน์โหลดภาพ/วิดีโอ' : 'Scan to view and download this session'}</small></div>}</> : cloudUnavailable ? <span>{th ? 'บันทึกในเครื่องแล้ว — แผนของคุณไม่รวมอัลบั้มออนไลน์' : 'Saved on this computer. Your plan does not include online albums.'}</span> : <><span>{th ? 'ผลงานอยู่ในเครื่องแล้ว — ยังอัปโหลดไม่ครบ' : 'Media is saved locally; cloud upload is incomplete.'}</span><button type="button" onClick={() => void retryCloudUpload()} disabled={cloudSyncing}>{cloudSyncing ? (th ? 'กำลังอัปโหลด…' : 'Uploading…') : (th ? 'ลองอัปโหลดอีกครั้ง' : 'Retry upload')}</button></>}{captureNotice && <span>{captureNotice}</span>}</div>}
           <div className="event-session-panel"><span className="event-icon"><Icon name="calendar" /></span><div className="event-copy"><span className="panel-kicker">EVENT SESSION</span><strong>{activeEventName || (th ? 'เซสชันในเครื่อง' : 'Local photo session')}</strong><small>{storageReady ? (th ? `โฟลเดอร์: ${storageName}` : `Folder: ${storageName}`) : (th ? 'ยังไม่ได้เลือกโฟลเดอร์จัดเก็บ' : 'No photo folder selected')}</small></div><button className="icon-button folder-action" onClick={storageReady ? onOpenStorage : onOpenSettings} title={storageReady ? (th ? 'เปิดโฟลเดอร์ภาพ' : 'Open photo folder') : (th ? 'เลือกโฟลเดอร์ภาพ' : 'Choose a photo folder')} aria-label={storageReady ? (th ? 'เปิดโฟลเดอร์ภาพ' : 'Open photo folder') : (th ? 'เลือกโฟลเดอร์ภาพ' : 'Choose a photo folder')}><Icon name={storageReady ? 'folder' : 'settings'} /></button><span className={`storage-ready ${storageReady ? 'is-ready' : ''}`}><i />{storageReady ? (th ? 'บันทึกพร้อม' : 'READY TO SAVE') : (th ? 'ตั้งค่าพื้นที่' : 'SET STORAGE')}</span></div>
       </>}
     </div>

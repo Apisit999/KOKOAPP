@@ -57,7 +57,7 @@ export type Bridge = {
   exportVideo(id: string): Promise<boolean>;
   listCaptureSessions(limit?: number, offset?: number): Promise<CaptureSessionRecord[]>;
   completeCaptureSession(sessionId: string, status: 'review' | 'confirmed' | 'cancelled' | 'retaken'): Promise<CaptureSessionRecord | null>;
-  syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number }>;
+  syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number; cloudAvailable?: boolean }>;
   onPhotoCloudProgress(listener: (progress: PhotoCloudProgress) => void): () => void;
   getCameraFolderWatchStatus(): Promise<CameraFolderWatchStatus>;
   startCameraFolderWatch(): Promise<CameraFolderWatchStatus>;

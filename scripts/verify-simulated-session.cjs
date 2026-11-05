@@ -64,7 +64,10 @@ app.on('browser-window-created', (_event, win) => {
         await evaluate(win, `document.querySelector('.capture-disc').click()`);
         await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Finish round')`, 'review screen', 30000);
         await shot(win, 'review');
-        step('review-shown', {});
+        await wait(800);
+        const cloudNote = await evaluate(win, `(document.querySelector('.photo-cloud-share') || {}).innerText || ''`);
+        step('review-shown', { cloudNote });
+        if (!/does not include online albums/.test(cloudNote)) throw new Error(`Free plan review shows the wrong cloud message: ${cloudNote}`);
         await clickButton(win, 'button', 'Finish round');
         await wait(1500);
         const sessions = await evaluate(win, `window.koko.listCaptureSessions(10, 0)`);
