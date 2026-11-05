@@ -77,6 +77,7 @@ const bridge: Bridge = {
   checkForUpdates: () => ipcRenderer.invoke('koko:update-check'),
   getUpdateStatus: () => ipcRenderer.invoke('koko:update-status'),
   openUpdateDownload: () => ipcRenderer.invoke('koko:update-open-download'),
+  reportProblem: description => ipcRenderer.invoke('koko:report-problem', description),
   activateLicense: licenseKey => ipcRenderer.invoke('koko:license-activate', licenseKey),
   claimFreeLicense: () => ipcRenderer.invoke('koko:license-free-claim'),
   deactivateLicense: () => ipcRenderer.invoke('koko:license-deactivate'),

@@ -23,6 +23,8 @@ import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
 import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
 import { PrintQueueStore, type PrintJob, type PrintOptionsSnapshot } from './services/print-queue';
 import { GuestExitPinStore } from './services/guest-exit-pin';
+import { buildProblemReport } from '../shared/problem-report';
+import os from 'node:os';
 
 const stagingBuild = process.env.KOKO_BUILD_CHANNEL === 'staging';
 if (stagingBuild) {
@@ -816,6 +818,15 @@ app.on('ready', () => {
     if (!url) return false;
     await shell.openExternal(url);
     return true;
+  });
+  ipcMain.handle('koko:report-problem', async (event, description: unknown) => {
+    trusted(event);
+    if (typeof description !== 'string') throw new Error('Invalid description');
+    const license = await licenses().getStatus().catch(() => null);
+    const report = buildProblemReport({ description, version: app.getVersion(), platform: process.platform, arch: process.arch, osRelease: os.release(), electron: process.versions.electron, licenseState: license?.state ?? 'unknown' });
+    // Many Windows PCs have no mail app, so the text is also returned for the user to copy.
+    const opened = await shell.openExternal(report.mailto).then(() => true, () => false);
+    return { body: report.body, opened };
   });
   ipcMain.handle('koko:license-free-claim', async event => {
     trusted(event);

@@ -86,6 +86,7 @@ export type Bridge = {
   checkForUpdates(): Promise<UpdateStatus>;
   getUpdateStatus(): Promise<UpdateStatus>;
   openUpdateDownload(): Promise<boolean>;
+  reportProblem(description: string): Promise<{ body: string; opened: boolean }>;
   activateLicense(licenseKey: string): Promise<LicenseSnapshot>;
   claimFreeLicense(): Promise<LicenseSnapshot>;
   beginLicenseAccountLink(): Promise<AccountLinkStart>;
