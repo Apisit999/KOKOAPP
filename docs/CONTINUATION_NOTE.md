@@ -1,8 +1,14 @@
-# Continuation note — KOKO Studio 0.1.26
+# Continuation note — KOKO Studio 0.1.29
 
-Last updated: 2026-10-11
+Last updated: 2026-11-05
 
-## Current worktree
+## Status since 0.1.26
+
+- 0.1.29 added account cloud photo sync, guest share links, printer readiness and an update banner. A later commit adds an in-app "Report a problem" form on the Help page (email draft with app version, OS and license state only; text is also copied for users without a mail app).
+- UX plan in progress: Phase 0 baseline screenshots and click/time measurement; Phase 1 design tokens (about 228 colours and 74 font sizes to consolidate); Phase 2 onboarding and navigation; Phase 3 split `src/renderer/main.tsx` and add simulated end-to-end tests; Phase 4 guest mode, template packs, filters, GIF, event summary.
+- The "Next work" list below is still valid; the 0.1.26 details are kept for history.
+
+## Worktree at 0.1.26
 
 - Version 0.1.26 adds a server-signed Free plan for capture, printing, and templates on one persistent installation identifier. Cloud albums are excluded from Free in both the desktop runtime and server endpoints; paid plans retain cloud sync. The Account page has a Free claim action.
 - Free self-claims are not yet tied to a kokomemory.com account. The package has no production License API URL or trusted public signing key, so customer Free activation is not available until service hosting/build configuration is supplied.
