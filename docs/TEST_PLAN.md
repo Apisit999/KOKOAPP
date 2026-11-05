@@ -38,4 +38,8 @@ License settings are compiled into the package, so build a throwaway QA package 
 3. Package with `KOKO_LICENSE_API_BASE_URL=http://127.0.0.1:8787`, `KOKO_LICENSE_PRODUCT_ID=koko-photobooth` and `KOKO_LICENSE_TRUSTED_KEYS_JSON={"koko-local-dev-1":"<public key PEM>"}` set, then run `npx electron scripts/verify-simulated-session.cjs "out/KOKO Studio-win32-x64/resources/app.asar" artifacts/sim first` and again with `second`. Keep `KOKO_LICENSE_API_BASE_URL` set when running it.
 4. Stop the server and rebuild without those variables before distributing anything; the QA package must never be shipped.
 
-Result on 2026-11-05 (0.1.29 plus UI changes): both phases passed with no renderer errors.
+A third phase, `rounds` (set `KOKO_QA_ROUNDS`, default 100), runs a 4-photo round, a retake, a cancel during the countdown and then consecutive single-photo rounds, and checks the session tally, photo count and that no storage recovery is pending.
+
+Results on 2026-11-05 (0.1.29 plus UI changes): `first` and `second` passed; `rounds` with 100 rounds passed in about 45 seconds (104 sessions added: 102 confirmed, 1 retaken, 1 cancelled; 108 photos added; no recovery issues; no renderer errors), and a restart afterwards recovered all of it. Not covered: killing the app in the middle of a round, disk-full, camera unplug, and the video mode.
+
+Observed: on the Free plan every finished round still calls the cloud sync, which the main process rejects with "The current plan does not include cloud photo albums". The renderer ignores it, so users see nothing, but it adds a failing call and log noise per round. Photos from a retaken round stay in the library.

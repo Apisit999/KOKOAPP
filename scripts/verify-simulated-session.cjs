@@ -27,6 +27,7 @@ async function waitFor(win, js, label, timeout = 15000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 const clickButton = (win, scope, text) => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll(${JSON.stringify(scope)})).find(x => x.textContent.trim() === ${JSON.stringify(text)}); if (b) b.click(); return Boolean(b); })()`);
+const clickCount = (win, n) => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll('[aria-label="Photos per session"] button')).find(x => x.textContent.trim().startsWith(${JSON.stringify(String(n))})); if (b) b.click(); return Boolean(b); })()`);
 const step = (name, data) => report.steps.push({ name, ...data });
 const shot = async (win, name) => fs.writeFileSync(path.join(output, `${name}.png`), (await win.webContents.capturePage()).toPNG());
 
@@ -78,6 +79,59 @@ app.on('browser-window-created', (_event, win) => {
         const job = await evaluate(win, `window.koko.submitPrintImage(new Uint8Array(${JSON.stringify(png)}), { printerName: '__koko_simulated_printer__', paper: '4x6', landscape: false, copies: 1 })`);
         step('print', { status: job.status });
         if (job.status !== 'simulated') throw new Error(`Simulated print returned status ${job.status}`);
+      } else if (phase === 'rounds') {
+        const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const ready = `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`;
+        const before = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        const photosBefore = (await evaluate(win, `window.koko.getPhotoStorageStatus()`)).photoCount;
+        stage = 'prepare capture page';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button');
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, ready, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        const captureRound = async label => {
+          stage = label;
+          await evaluate(win, `document.querySelector('.capture-disc').click()`);
+          await waitFor(win, hasText('Finish round'), `review (${label})`, 30000);
+        };
+        const finishRound = async () => { await clickButton(win, 'button', 'Finish round'); await waitFor(win, ready, 'ready after finish', 20000); };
+        // 4-photo round
+        await clickCount(win, 4);
+        if (!(await evaluate(win, `document.querySelector('[aria-pressed="true"][class="selected"]') !== null`))) throw new Error('Photo count buttons not found');
+        await captureRound('4-photo round');
+        await finishRound();
+        // retake: first take is discarded, the second take is confirmed
+        await clickCount(win, 2);
+        await captureRound('retake first take');
+        await clickButton(win, 'button', 'Retake');
+        await wait(600);
+        await waitFor(win, hasText('Finish round'), 'review after retake', 30000);
+        await finishRound();
+        // cancel during countdown
+        await clickCount(win, 1);
+        await clickButton(win, '.countdown-options button', '3s');
+        stage = 'cancel during countdown';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Cancel session') || `Array.from(document.querySelectorAll('.cancel-session')).length > 0`, 'cancel button', 8000);
+        await evaluate(win, `document.querySelector('.cancel-session').click()`);
+        await waitFor(win, ready, 'ready after cancel', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        // consecutive single-photo rounds
+        for (let i = 0; i < rounds; i++) { await captureRound(`round ${i + 1}/${rounds}`); await finishRound(); }
+        stage = 'tally';
+        const sessions = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        const added = sessions.length - before.length;
+        const tally = sessions.reduce((all, s) => ({ ...all, [s.status]: (all[s.status] || 0) + 1 }), {});
+        const status = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+        const recovery = await evaluate(win, `window.koko.inspectPhotoRecovery()`);
+        step('rounds', { perSession: sessions.slice(0, added).reverse().slice(0, 4).map(s => [s.status, s.photoIds.length]), requested: rounds, sessionsAdded: added, tally, photosAdded: status.photoCount - photosBefore, photoCount: status.photoCount, pendingRecovery: status.pendingRecovery, recoveryIssues: recovery.length });
+        const confirmedAdded = (tally.confirmed || 0) - before.filter(s => s.status === 'confirmed').length;
+        if (confirmedAdded !== rounds + 2) throw new Error(`Expected ${rounds + 2} new confirmed sessions, got ${confirmedAdded}`);
+        if (status.pendingRecovery !== 0 || recovery.length !== 0) throw new Error('Photo storage needs recovery after the rounds');
       } else {
         stage = 'recovery after restart';
         const sessions = await evaluate(win, `window.koko.listCaptureSessions(10, 0)`);
@@ -102,5 +156,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, phase === "rounds" ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
