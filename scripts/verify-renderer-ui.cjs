@@ -88,6 +88,20 @@ app.on('browser-window-created', (_event, win) => {
         await evaluate(win, `Array.from(document.querySelectorAll('.sidebar nav button')).find(button => button.textContent.trim() === ${JSON.stringify(name)})?.click()`);
         await pause();
         await inspect(win, name.toLowerCase() + '-en', 1280, 720);
+        if (name === 'Templates') {
+          stage = 'Template preset';
+          report.templatePreset = await evaluate(win, `(async () => {
+            const chips = Array.from(document.querySelectorAll('.template-preset-grid button'));
+            const birthday = chips.find(button => /Birthday/.test(button.textContent));
+            birthday?.click();
+            await new Promise(resolve => setTimeout(resolve, 200));
+            const title = Array.from(document.querySelectorAll('.template-field')).find(field => /^Title/.test(field.textContent))?.querySelector('input')?.value;
+            const pressed = Array.from(document.querySelectorAll('.template-options button')).filter(button => button.getAttribute('aria-pressed') === 'true').map(button => button.textContent.trim());
+            return { chipCount: chips.length, title, pressed };
+          })()`);
+          if (report.templatePreset.chipCount < 6 || report.templatePreset.title !== 'Happy Birthday!' || !report.templatePreset.pressed.some(text => /^4/.test(text))) throw new Error('Template presets did not apply: ' + JSON.stringify(report.templatePreset));
+          await inspect(win, 'templates-preset-en', 1280, 720);
+        }
       }
       await evaluate(win, `document.querySelector('.topbar-account').click()`);
       await pause();
