@@ -465,9 +465,7 @@ function createWindow() {
     event.preventDefault();
     mainWindow?.webContents.send('koko:operator-access-request');
   });
-  mainWindow.webContents.on('did-finish-load', () => {
-    if (guestModeActive) mainWindow?.webContents.send('koko:operator-access-request');
-  });
+  // Guest mode resumes without a PIN prompt: the operator leaves it with "Back to controls" or by launching the app again.
   mainWindow.on('closed', () => { mainWindow = null; });
   const load = MAIN_WINDOW_VITE_DEV_SERVER_URL
     ? mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)

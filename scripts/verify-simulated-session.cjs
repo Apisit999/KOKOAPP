@@ -121,6 +121,15 @@ app.on('browser-window-created', (_event, win) => {
           await shot(win, `guest-${w}x${h}`);
           step(`guest-${w}x${h}`, await evaluate(win, `({ overflowX: document.documentElement.scrollWidth > innerWidth, overflowY: document.documentElement.scrollHeight > innerHeight, scrollH: document.documentElement.scrollHeight, buttons: Array.from(document.querySelectorAll('.guest-capture button')).filter(b => b.offsetParent).map(b => b.textContent.trim().slice(0, 30) + '@' + Math.round(b.getBoundingClientRect().height)) })`));
         }
+      } else if (phase === 'guest-resume') {
+        // Real restart: Guest mode was left active in this profile by an earlier run. No reload, no clicks.
+        stage = 'guest resume';
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'Guest mode to resume after restart', 15000);
+        await wait(1500);
+        const resumed = await evaluate(win, `({ guest: Boolean(document.querySelector('.guest-capture')), exitPrompt: Boolean(document.querySelector('.guest-exit-backdrop')), operatorShell: Boolean(document.querySelector('.shell')) })`);
+        await shot(win, 'guest-resumed');
+        step('guest-resumed', resumed);
+        if (!resumed.guest || resumed.exitPrompt || resumed.operatorShell) throw new Error('Guest mode did not resume cleanly: ' + JSON.stringify(resumed));
       } else if (phase === 'guest-sizes') {
         // Guest mode at several screen sizes and in Thai, using Chromium device emulation (the test window itself cannot be resized).
         const lang = process.env.KOKO_QA_LANG || 'th';
