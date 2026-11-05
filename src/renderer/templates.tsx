@@ -400,6 +400,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <label className="template-field">{th ? 'สีพื้นหลัง' : 'Background'}<select value={template.background} onChange={event => update('background', event.target.value)}>{COLORS.map(color => <option value={color.value} key={color.value}>{color.name}</option>)}</select></label>
         <label className="template-field">{th ? 'สีกรอบ' : 'Frame color'}<input type="color" value={template.frame} onChange={event => update('frame', event.target.value)} /></label>
         <label className="template-check"><input type="checkbox" checked={template.showDate} onChange={event => update('showDate', event.target.checked)} />{th ? 'ใส่วันที่' : 'Include date'}</label>
+        <details className="template-advanced"><summary>{th ? 'โลโก้ กรอบ และข้อความบนภาพถ่าย' : 'Logo, frame and photo layers'}</summary>
         <label className="template-field">{th ? 'โลโก้ (ไม่เกิน 2 MB)' : 'Logo (up to 2 MB)'}<input type="file" accept="image/*" onChange={event => void uploadLogo(event.target.files?.[0])} /></label>
         {template.logo && <button type="button" className="text-link" onClick={() => update('logo', '')}>{th ? 'นำโลโก้ออก' : 'Remove logo'}</button>}
         <label className="template-field">{th ? 'กรอบ PNG โปร่งใส (ไม่เกิน 500 KB)' : 'Transparent PNG frame (up to 500 KB)'}<input type="file" accept="image/png" onChange={event => void uploadFrame(event.target.files?.[0])} /></label>
@@ -407,6 +408,8 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         {template.overlay && <button type="button" className="text-link" onClick={() => update('overlay', '')}>{th ? 'นำกรอบออก' : 'Remove frame'}</button>}
         <TextLayersEditor title={th ? 'ข้อความบนภาพถ่าย' : 'Photo text layers'} layers={template.textLayers ?? []} th={th} onChange={layers => update('textLayers', layers)} />
         <ImageLayersEditor title={th ? 'สติกเกอร์ภาพถ่าย' : 'Photo stickers'} layers={template.imageLayers ?? []} th={th} onUpload={file => uploadSticker(file, 'photo-image')} onChange={layers => update('imageLayers', layers)} />
+        </details>
+        <details className="template-advanced"><summary>{th ? 'วิดีโอ' : 'Video'}</summary>
         <label className="template-field">{th ? 'กรอบวิดีโอ PNG โปร่งใส (แนวนอน/แนวตั้ง, ไม่เกิน 500 KB)' : 'Video frame PNG (transparent, landscape or portrait, up to 500 KB)'}<input type="file" accept="image/png" onChange={event => void uploadVideoFrame(event.target.files?.[0])} /></label>
         <small className="muted">{th ? 'รองรับกรอบแนวนอน แนวตั้ง และสี่เหลี่ยม โปรแกรมจะปรับความละเอียดวิดีโอให้ตรงกับสัดส่วนกรอบ' : 'Landscape, portrait, and square frames are supported. Video output is resized to match the frame ratio.'}</small>
         {template.videoOverlay && <>
@@ -433,6 +436,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         </div>
         <TextLayersEditor title={th ? 'ข้อความบนวิดีโอ' : 'Video text layers'} layers={template.videoTextLayers ?? []} th={th} onChange={layers => update('videoTextLayers', layers)} />
         <ImageLayersEditor title={th ? 'สติกเกอร์วิดีโอ' : 'Video stickers'} layers={template.videoImageLayers ?? []} th={th} onUpload={file => uploadSticker(file, 'video-image')} onChange={layers => update('videoImageLayers', layers)} />
+        </details>
         <div className="template-actions">{printEnabled && <button className="camera-secondary" onClick={() => void printImage()} disabled={!complete || busy}>{th ? 'พิมพ์…' : 'Print…'}</button>}<button className="camera-secondary" onClick={saveTemplate}>{th ? 'บันทึกเทมเพลต' : 'Save template'}</button><button className="primary" onClick={() => void exportImage()} disabled={!complete || busy}>{busy ? (th ? 'กำลังส่งออก…' : 'Exporting…') : (th ? 'ส่งออก PNG' : 'Export PNG')}</button></div>
       </section>
       <section className="template-workspace">

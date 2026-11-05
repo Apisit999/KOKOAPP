@@ -220,3 +220,12 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .advanced-settings > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
 .advanced-settings[open] > summary { margin-bottom: 14px }
 .advanced-settings > section { margin-top: 14px }
+
+/* Template editor groups: basic fields stay visible, the rest folds away. */
+.template-advanced { display: grid; gap: 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 0 14px }
+.template-advanced > summary { cursor: pointer; padding: 12px 0; font-size: 13px; line-height: 1.5; font-weight: 600; list-style: none }
+.template-advanced > summary::-webkit-details-marker { display: none }
+.template-advanced > summary::before { content: '＋ '; color: var(--gold) }
+.template-advanced[open] > summary::before { content: '－ ' }
+.template-advanced[open] { padding-bottom: 14px }
+.template-advanced > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
