@@ -121,6 +121,49 @@ app.on('browser-window-created', (_event, win) => {
           await shot(win, `guest-${w}x${h}`);
           step(`guest-${w}x${h}`, await evaluate(win, `({ overflowX: document.documentElement.scrollWidth > innerWidth, overflowY: document.documentElement.scrollHeight > innerHeight, scrollH: document.documentElement.scrollHeight, buttons: Array.from(document.querySelectorAll('.guest-capture button')).filter(b => b.offsetParent).map(b => b.textContent.trim().slice(0, 30) + '@' + Math.round(b.getBoundingClientRect().height)) })`));
         }
+      } else if (phase === 'guest-sizes') {
+        // Guest mode at several screen sizes and in Thai, using Chromium device emulation (the test window itself cannot be resized).
+        const lang = process.env.KOKO_QA_LANG || 'th';
+        stage = 'guest sizes setup';
+        await evaluate(win, `window.koko.saveSettings({ language: '${lang}', highContrast: false, fullscreen: false })`);
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+          await evaluate(win, `document.querySelector('.brand-button').click()`);
+          await wait(800);
+          await evaluate(win, `(() => { const b = document.querySelector('.welcome-actions .camera-secondary'); if (b) b.click(); })()`);
+        }
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+        if (process.env.KOKO_QA_CSS) await win.webContents.insertCSS(fs.readFileSync(process.env.KOKO_QA_CSS, 'utf8'));
+        // Bottom of the whole shutter block (disc plus its caption), so a clipped caption is caught.
+        const discBottom = `Math.round(document.querySelector('.guest-capture .capture-actions').getBoundingClientRect().bottom)`;
+        const actionBottoms = `(() => { const bs = Array.from(document.querySelectorAll('.guest-capture .review-actions button')); return bs.map(b => Math.round(b.getBoundingClientRect().bottom)); })()`;
+        const results = [];
+        for (const [w, h] of [[800, 1280], [1024, 768], [1280, 720], [1920, 1080]]) {
+          stage = `guest ${w}x${h}`;
+          win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
+          await wait(900);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready', 20000);
+          const ready = await evaluate(win, `(() => { const r = sel => { const e = document.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; }; return { innerWidth, innerHeight, disc: ${discBottom}, overflowX: document.documentElement.scrollWidth > innerWidth, preview: r('.guest-capture .camera-preview'), panel: r('.guest-capture .camera-panel'), left: r('.guest-capture .studio-left'), main: r('.guest-capture'), strip: r('.guest-capture .capture-strip') }; })()`);
+          await shot(win, `guest-${lang}-${w}x${h}-ready`);
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'review', 40000);
+          await wait(600);
+          const review = await evaluate(win, `({ buttons: ${actionBottoms}, innerHeight })`);
+          await shot(win, `guest-${lang}-${w}x${h}-review`);
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready again', 20000);
+          await wait(400);
+          const next = await evaluate(win, `({ disc: ${discBottom}, innerHeight })`);
+          const entry = { size: `${w}x${h}`, ready, reviewBottoms: review.buttons, next, readyFits: ready.disc <= h, reviewFits: review.buttons.every(b => b <= h), nextFits: next.disc <= h };
+          results.push(entry);
+          step(`guest-${lang}-${w}x${h}`, entry);
+        }
+        win.webContents.disableDeviceEmulation();
+        report.allFit = results.every(r => r.readyFits && r.reviewFits && r.nextFits && !r.ready.overflowX);
+        if (!report.allFit) throw new Error('Guest mode does not fit every tested size: ' + JSON.stringify(results.filter(r => !(r.readyFits && r.reviewFits && r.nextFits && !r.ready.overflowX)).map(r => r.size)));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
