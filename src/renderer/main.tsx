@@ -739,8 +739,14 @@ type ReadinessItem = { title: string; detail: string; state: 'ready' | 'todo' | 
 function ReadinessChecklist({ items, th }: { items: ReadinessItem[]; th: boolean }) {
   const required = items.filter(item => item.state !== 'optional');
   const ready = required.filter(item => item.state === 'ready').length;
+  const next = required.find(item => item.state === 'todo');
   return <section className="readiness-section" aria-labelledby="readiness-title">
     <div className="section-heading"><div><p className="eyebrow">KOKO / EVENT SETUP</p><h2 id="readiness-title">{th ? 'เตรียมงานให้พร้อม' : 'Get your event ready'}</h2><p>{th ? `พร้อมแล้ว ${ready} จาก ${required.length} ขั้นตอนหลัก · หน้าจอแขกเป็นตัวเลือกเสริม` : `${ready} of ${required.length} essentials ready · The guest display is optional.`}</p></div></div>
+    <div className={`next-step ${next ? '' : 'all-ready'}`} role="status">
+      <span className="next-step-label">{next ? (th ? 'ขั้นถัดไป' : 'NEXT STEP') : (th ? 'พร้อมแล้ว' : 'ALL SET')}</span>
+      <strong>{next ? `${next.title} — ${next.detail}` : (th ? 'ทุกขั้นตอนหลักพร้อมแล้ว เริ่มเซสชันได้เลย' : 'Every essential step is ready. You can start a session.')}</strong>
+      {next && <button type="button" className="primary" onClick={next.onClick}>{next.action} <span>→</span></button>}
+    </div>
     <div className="readiness-grid">{items.map((item, index) => <article className={`readiness-card readiness-${item.state}`} key={item.title}>
       <span className="readiness-number">{String(index + 1).padStart(2, '0')}</span>
       <span className="readiness-indicator" aria-label={item.state === 'ready' ? (th ? 'พร้อม' : 'Ready') : item.state === 'optional' ? (th ? 'ตัวเลือก' : 'Optional') : (th ? 'ต้องตั้งค่า' : 'Needs setup')}>{item.state === 'ready' ? '✓' : item.state === 'optional' ? '○' : '·'}</span>
