@@ -82,6 +82,45 @@ app.on('browser-window-created', (_event, win) => {
         const job = await evaluate(win, `window.koko.submitPrintImage(new Uint8Array(${JSON.stringify(png)}), { printerName: '__koko_simulated_printer__', paper: '4x6', landscape: false, copies: 1 })`);
         step('print', { status: job.status });
         if (job.status !== 'simulated') throw new Error(`Simulated print returned status ${job.status}`);
+      } else if (phase === 'guest') {
+        stage = 'guest mode';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        // The app resumes Guest mode after a reload, so only walk through the dashboard when it did not.
+        if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+          await evaluate(win, `document.querySelector('.brand-button').click()`);
+          await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Start Guest mode')`, 'dashboard', 8000);
+          await clickButton(win, 'button', 'Start Guest mode');
+        }
+        await clickButton(win, 'button', 'Stay in Photobooth');
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        if (process.env.KOKO_QA_CSS) await win.webContents.insertCSS(fs.readFileSync(process.env.KOKO_QA_CSS, 'utf8'));
+        stage = 'guest auto-start';
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'capture button without pressing Start live preview', 20000);
+        const hidden = await evaluate(win, `({ startButton: Array.from(document.querySelectorAll('.guest-capture button')).some(b => b.offsetParent && /Start live preview/.test(b.textContent)), sampleCard: Boolean(document.querySelector('.guest-capture .sample-session-card')?.offsetParent), cameraSelect: Boolean(document.querySelector('.guest-capture .camera-select-label')?.offsetParent), settingsGear: Boolean(document.querySelector('.guest-capture .camera-settings-button')?.offsetParent), techNote: Boolean(document.querySelector('.guest-capture .camera-capability-note')?.offsetParent), discSize: Math.round(document.querySelector('.guest-capture .capture-disc').getBoundingClientRect().width), scrolls: document.documentElement.scrollHeight > innerHeight, innerHeight, scrollHeight: document.documentElement.scrollHeight })`);
+        step('guest-controls', hidden);
+        step('guest-reach-ready', await evaluate(win, `({ innerHeight, disc: Math.round(document.querySelector('.guest-capture .capture-disc').getBoundingClientRect().bottom), finish: (() => { const b = Array.from(document.querySelectorAll('.guest-capture button')).find(x => x.textContent.trim() === 'Finish round'); return b ? Math.round(b.getBoundingClientRect().bottom) : null; })(), retake: (() => { const b = Array.from(document.querySelectorAll('.guest-capture button')).find(x => x.textContent.trim() === 'Retake'); return b ? Math.round(b.getBoundingClientRect().bottom) : null; })() })`));
+        if (hidden.startButton || hidden.sampleCard || hidden.cameraSelect || hidden.settingsGear || hidden.techNote) throw new Error('Guest mode still shows operator controls: ' + JSON.stringify(hidden));
+        stage = 'guest capture round';
+        await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+        await waitFor(win, `Array.from(document.querySelectorAll('.guest-capture button')).some(b => b.textContent.trim() === 'Finish round')`, 'guest review', 40000);
+        await wait(500);
+        step('guest-reach-review', await evaluate(win, `({ innerHeight, disc: Math.round(document.querySelector('.guest-capture .capture-disc').getBoundingClientRect().bottom), finish: (() => { const b = Array.from(document.querySelectorAll('.guest-capture button')).find(x => x.textContent.trim() === 'Finish round'); return b ? Math.round(b.getBoundingClientRect().bottom) : null; })(), retake: (() => { const b = Array.from(document.querySelectorAll('.guest-capture button')).find(x => x.textContent.trim() === 'Retake'); return b ? Math.round(b.getBoundingClientRect().bottom) : null; })() })`));
+        await shot(win, 'guest-review');
+        await clickButton(win, '.guest-capture button', 'Finish round');
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready for next guest', 20000);
+        await wait(500);
+        const next = await evaluate(win, `({ innerHeight, disc: Math.round(document.querySelector('.guest-capture .capture-disc').getBoundingClientRect().bottom), staleThumbs: document.querySelectorAll('.guest-capture .guest-round-photo').length })`);
+        step('guest-reach-next', next);
+        if (next.disc > next.innerHeight || next.staleThumbs > 0) throw new Error('Next guest starts with a stale or off-screen state: ' + JSON.stringify(next));
+        step('guest-round', { next: 'ready' });
+        await wait(500);
+        for (const [w, h] of [[1920, 1080], [1280, 720], [800, 1280]]) {
+          win.setContentSize(w, h); await wait(600);
+          await shot(win, `guest-${w}x${h}`);
+          step(`guest-${w}x${h}`, await evaluate(win, `({ overflowX: document.documentElement.scrollWidth > innerWidth, overflowY: document.documentElement.scrollHeight > innerHeight, scrollH: document.documentElement.scrollHeight, buttons: Array.from(document.querySelectorAll('.guest-capture button')).filter(b => b.offsetParent).map(b => b.textContent.trim().slice(0, 30) + '@' + Math.round(b.getBoundingClientRect().height)) })`));
+        }
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;

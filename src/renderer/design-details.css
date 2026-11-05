@@ -229,3 +229,25 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .template-advanced[open] > summary::before { content: '－ ' }
 .template-advanced[open] { padding-bottom: 14px }
 .template-advanced > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
+
+/* Guest mode: hide operator-only controls and make the shutter easy to hit. */
+.guest-camera-panel .camera-select-label,
+.guest-camera-panel .camera-settings-button,
+.guest-camera-panel .camera-capability-note,
+.guest-camera-panel .sample-session-card { display: none }
+.guest-camera-panel .capture-strip { grid-template-columns: minmax(0,1fr) 150px }
+.guest-camera-panel .capture-disc { width: 120px; height: 120px }
+.guest-camera-panel .capture-caption { font-size: 13px; letter-spacing: .12em }
+.guest-heading { padding: 10px 0 4px }
+.guest-heading h1 { font-size: 28px; margin: 2px 0 4px }
+.guest-camera-panel .camera-preview { max-height: calc(100vh - 430px); min-height: 220px }
+/* While a guest reviews a finished round the live view is not needed: collapse it (the video element stays mounted) so Retake and Finish stay on screen. */
+.guest-camera-panel.guest-reviewing .camera-preview { max-height: 0; min-height: 0; margin: 0; border-width: 0; visibility: hidden }
+.guest-camera-panel.guest-reviewing .capture-actions { display: none }
+.guest-camera-panel.guest-reviewing .capture-strip { grid-template-columns: minmax(0,1fr) }
+.guest-camera-panel.guest-reviewing .guest-round-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 320px)); justify-content: center; gap: 14px }
+.guest-camera-panel.guest-reviewing .review-feedback { flex-wrap: wrap; gap: 16px; padding: 18px 20px }
+.guest-camera-panel.guest-reviewing .review-feedback strong { font-size: 22px }
+.guest-camera-panel.guest-reviewing .review-feedback span { font-size: 14px }
+.guest-camera-panel.guest-reviewing .review-actions { display: flex; gap: 12px }
+.guest-camera-panel.guest-reviewing .review-actions button { min-height: 64px; padding: 0 30px; font-size: 18px; border-radius: 12px }
