@@ -192,3 +192,12 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
   .guest-capture { width:calc(100% - 20px); margin:10px auto }
   .guest-toolbar { padding:8px 0 12px }
 }
+
+/* Sidebar groups: one small label per workflow stage, tighter than the old single STUDIO label. */
+.nav-group { display: grid; gap: 4px }
+.nav-group .side-label { margin: 18px 11px 6px }
+.nav-group:first-child .side-label { margin-top: 24px }
+.nav-group .side-label { margin: 12px 11px 4px }
+.nav-group:first-child .side-label { margin-top: 16px }
+.sidebar nav .nav-group button { min-height: 36px }
+.nav-group { gap: 2px }
