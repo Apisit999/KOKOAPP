@@ -209,3 +209,14 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .next-step:lang(th) .next-step-label, .app:lang(th) .next-step-label { letter-spacing: 0 }
 .next-step strong { flex: 1 1 auto; min-width: 0; font-weight: 500; font-size: 14px }
 .next-step .primary { flex: 0 0 auto; min-height: 38px }
+
+/* Collapsible group for rarely used settings. */
+.advanced-settings { margin-top: 14px; max-width: 850px }
+.advanced-settings > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 14px 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; cursor: pointer; font-weight: 600; list-style: none }
+.advanced-settings > summary::-webkit-details-marker { display: none }
+.advanced-settings > summary::before { content: '＋'; color: var(--gold) }
+.advanced-settings[open] > summary::before { content: '－' }
+.advanced-settings > summary small { color: #8d8c85; font-weight: 400; font-size: 12px }
+.advanced-settings > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
+.advanced-settings[open] > summary { margin-bottom: 14px }
+.advanced-settings > section { margin-top: 14px }
