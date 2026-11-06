@@ -765,3 +765,7 @@ button { -webkit-tap-highlight-color: transparent }
 .update-banner ul { margin: 6px 0 0; padding-left: 18px; }
 .update-banner small { display: block; margin-top: 6px; opacity: .8; }
 .update-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.event-summary { display:grid; gap:6px; margin:12px 0 0; padding:10px 12px; border:1px solid rgba(255,255,255,.14); border-radius:8px }
+.event-summary div { display:flex; justify-content:space-between; gap:12px; font-size:11px }
+.event-summary dt { opacity:.7 }
+.event-summary dd { margin:0; text-align:right; font-weight:600 }

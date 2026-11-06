@@ -39,6 +39,7 @@
     "test:update": "node --test tests/update-checker.test.cjs",
     "verify:simulated-session": "electron scripts/verify-simulated-session.cjs",
     "test:template-presets": "node --test tests/template-presets.test.cjs",
+    "test:event-summary": "node --test tests/event-summary.test.cjs",
     "test:problem-report": "node --test tests/problem-report.test.cjs",
     "test:printer-readiness": "node --test tests/printer-readiness.test.cjs",
     "test:studio-cloud": "node --test tests/studio-cloud-client.test.cjs"
