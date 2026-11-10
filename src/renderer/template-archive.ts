@@ -1,9 +1,10 @@
 import type { CaptureImageLayer, CaptureTextLayer } from '../shared/contract';
 import { isValidPhotoSlot, type PhotoSlot } from './template-layout.ts';
+import { countAllowed, isTemplateSize, type TemplateCount, type TemplateSizeId } from '../shared/template-size.ts';
 import { MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-layers.ts';
 
 export type PortableTemplate = {
-  id: string; name: string; count: 1 | 2 | 4; title: string; footer: string; fontId?: string;
+  id: string; name: string; count: TemplateCount; size?: TemplateSizeId; title: string; footer: string; fontId?: string;
   background: string; frame: string; showDate: boolean; logo: string; overlay: string;
   videoOverlay: string; slots?: PhotoSlot[]; videoFrame?: PhotoSlot; videoAspect?: number; mediaMode?: 'photo' | 'video';
   textLayers?: CaptureTextLayer[]; videoTextLayers?: CaptureTextLayer[];
@@ -54,7 +55,7 @@ function validateTemplate(value: unknown): PortableTemplate {
   if (!value || typeof value !== 'object') throw new Error('Archive contains an invalid template.');
   const item = value as Record<string, unknown>;
   const text = (key: string, max: number) => typeof item[key] === 'string' && (item[key] as string).length <= max;
-  if (!text('id', 80) || !item.id || !text('name', 120) || !item.name || ![1, 2, 4].includes(item.count as number)
+  if (!text('id', 80) || !item.id || !text('name', 120) || !item.name || (item.size !== undefined && !isTemplateSize(item.size)) || !countAllowed(item.size as undefined, item.count)
     || !text('title', 200) || !text('footer', 200) || !COLORS.test(String(item.background)) || !COLORS.test(String(item.frame))
     || (item.fontId !== undefined && (typeof item.fontId !== 'string' || !FONT_ID.test(item.fontId)))
     || typeof item.showDate !== 'boolean' || !['logo', 'overlay', 'videoOverlay'].every(key => text(key, 2_000_000))) {
@@ -80,7 +81,7 @@ function validateTemplate(value: unknown): PortableTemplate {
   if (item.videoAspect !== undefined && (typeof item.videoAspect !== 'number' || !Number.isFinite(item.videoAspect) || item.videoAspect < 0.2 || item.videoAspect > 5)) throw new Error('Archive contains invalid video aspect data.');
   const photoSlots = slots('slots', 4);
   if (photoSlots && photoSlots.length !== item.count) throw new Error('Photo slot count must match the template photo count.');
-  return { id: item.id as string, name: item.name as string, count: item.count as 1 | 2 | 4, title: item.title as string, footer: item.footer as string, fontId: item.fontId as string | undefined,
+  return { id: item.id as string, name: item.name as string, count: item.count as TemplateCount, size: item.size as TemplateSizeId | undefined, title: item.title as string, footer: item.footer as string, fontId: item.fontId as string | undefined,
     background: item.background as string, frame: item.frame as string, showDate: item.showDate, logo: item.logo as string, overlay: item.overlay as string, videoOverlay: item.videoOverlay as string,
     slots: photoSlots, videoFrame: item.videoFrame as PhotoSlot | undefined, videoAspect: item.videoAspect as number | undefined, mediaMode: item.mediaMode === 'video' ? 'video' : undefined,
     textLayers: layers('textLayers', 6, validTextLayer), videoTextLayers: layers('videoTextLayers', 6, validTextLayer),

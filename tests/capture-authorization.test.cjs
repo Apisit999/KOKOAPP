@@ -4,7 +4,7 @@ const { CaptureAuthorizationRegistry } = require('../src/main/services/capture-a
 
 test('grants only 1, 2, or 4 valid photos and decrements successful saves', () => {
   const grants = new CaptureAuthorizationRegistry();
-  for (const value of [0, -1, 3, 5, 1.2, '2']) assert.throws(() => grants.begin(value), /photo count/);
+  for (const value of [0, -1, 5, 6, 1.2, '2']) assert.throws(() => grants.begin(value), /photo count/);
   const id = grants.begin(2, 1000);
   grants.claim(id, 1001);
   assert.equal(grants.cancel(id), false);

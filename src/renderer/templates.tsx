@@ -3,7 +3,8 @@ import type { CaptureImageLayer, CaptureTextLayer, PhotoRecord, PrintJobRecord, 
 import { defaultPhotoSlots, isValidPhotoSlot, movePhotoSlot, normalizedRectToPixels, resizePhotoSlot, type PhotoSlot } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers, MAX_STICKER_BYTES, MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-layers';
 import { exportTemplateArchive, mergeTemplateArchive, parseTemplateArchiveWithFonts, type ArchiveFont } from './template-archive';
-import { canvasHeightFor, detectOpenings, posterize, stretchNeeded, SUPPORTED_OPENING_COUNTS } from './frame-import';
+import { detectOpenings, posterize, SUPPORTED_OPENING_COUNTS } from './frame-import';
+import { allowedCounts, bestSizeFor, canvasSize, countAfterSizeChange, countAllowed, isTemplateSize, sizeInfo, TEMPLATE_SIZES, type TemplateCount, type TemplateSizeId } from '../shared/template-size';
 import { addFontFromBytes, base64ToBytes, bytesToBase64, ensureFonts, fontStack, importFontFiles, refreshFonts, removeFont, useFonts } from './fonts';
 import { TEMPLATE_PRESETS, applyTemplatePreset } from './template-presets';
 
@@ -11,7 +12,8 @@ type Template = {
   id: string;
   name: string;
   fontId?: string;
-  count: 1 | 2 | 4;
+  count: TemplateCount;
+  size?: TemplateSizeId;
   title: string;
   footer: string;
   background: string;
@@ -50,11 +52,11 @@ function loadTemplates(): Template[] {
     if (!Array.isArray(value)) return [];
     return value.filter((item): item is Template => Boolean(item && typeof item === 'object'
       && typeof item.id === 'string' && typeof item.name === 'string'
-      && [1, 2, 4].includes(item.count) && typeof item.title === 'string'
+      && countAllowed(isTemplateSize(item.size) ? item.size : undefined, item.count) && typeof item.title === 'string'
       && typeof item.footer === 'string' && typeof item.background === 'string'
       && typeof item.frame === 'string' && typeof item.showDate === 'boolean'
       && typeof item.logo === 'string'))
-      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, fontId: typeof item.fontId === 'string' && /^[0-9a-f]{32}$/.test(item.fontId) ? item.fontId : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
+      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, size: isTemplateSize(item.size) ? item.size : undefined, fontId: typeof item.fontId === 'string' && /^[0-9a-f]{32}$/.test(item.fontId) ? item.fontId : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
   } catch { return []; }
 }
 
@@ -69,8 +71,7 @@ export function loadGuestTemplate(): GuestTemplate | null {
 
 export async function drawComposition(canvas: HTMLCanvasElement, photos: PhotoRecord[], template: Template, language: boolean) {
   await ensureFonts([template.fontId, ...(template.textLayers ?? []).map(layer => layer.fontId)]);
-  const width = 1200;
-  const height = template.count === 1 ? 1500 : template.count === 2 ? 1800 : 1600;
+  const { width, height } = canvasSize(template.size, template.count);
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d');
@@ -79,7 +80,7 @@ export async function drawComposition(canvas: HTMLCanvasElement, photos: PhotoRe
   context.fillRect(0, 0, width, height);
   const light = ['#f4f0e6', '#e9c9c3', '#c7d0bd'].includes(template.background);
   const ink = light ? '#30291f' : '#f4f0e6';
-  const slots = template.slots?.length === template.count ? template.slots : defaultPhotoSlots(template.count, template.title, template.logo, template.footer, template.showDate);
+  const slots = template.slots?.length === template.count ? template.slots : defaultPhotoSlots(template.count, template.title, template.logo, template.footer, template.showDate, template.size);
 
   const bitmaps: ImageBitmap[] = [];
   try {
@@ -147,6 +148,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
   const [printerName, setPrinterName] = useState('');
   const [paper, setPaper] = useState<PrintOptionsSnapshot['paper']>('A4');
   const [landscape, setLandscape] = useState(false);
+  const [stripTwoUp, setStripTwoUp] = useState(true);
   const [copies, setCopies] = useState(1);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const slotEditorRef = useRef<HTMLDivElement>(null);
@@ -154,8 +156,8 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
   const videoImageEditorRef = useRef<HTMLDivElement>(null);
   const archiveInputRef = useRef<HTMLInputElement>(null);
   const slotDragRef = useRef<{ index: number; kind: 'photo' | 'video' | 'photo-image' | 'video-image'; mode: 'move' | 'resize'; startX: number; startY: number; startSlot: PhotoSlot } | null>(null);
-  const photoSlots = useMemo(() => template.slots?.length === template.count ? template.slots : defaultPhotoSlots(template.count, template.title, template.logo, template.footer, template.showDate), [template]);
-  const canvasHeight = template.count === 1 ? 1500 : template.count === 2 ? 1800 : 1600;
+  const photoSlots = useMemo(() => template.slots?.length === template.count ? template.slots : defaultPhotoSlots(template.count, template.title, template.logo, template.footer, template.showDate, template.size), [template]);
+  const { width: canvasWidth, height: canvasHeight } = canvasSize(template.size, template.count);
   const videoFrameRect = template.videoFrame ?? { x: 0, y: 0, width: 100, height: 100 };
   const available = useMemo(() => photos.filter(photo => selected.includes(photo.id)), [photos, selected]);
   const complete = available.length === template.count;
@@ -191,7 +193,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
   }
   function updateSlot(index: number, slot: PhotoSlot) {
     setTemplate(current => {
-      const currentSlots = current.slots?.length === current.count ? current.slots : defaultPhotoSlots(current.count, current.title, current.logo, current.footer, current.showDate);
+      const currentSlots = current.slots?.length === current.count ? current.slots : defaultPhotoSlots(current.count, current.title, current.logo, current.footer, current.showDate, current.size);
       const nextSlots = currentSlots.slice(); nextSlots[index] = slot;
       return { ...current, slots: nextSlots };
     });
@@ -352,23 +354,24 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         if (!openings.length) {
           onMessage(th ? 'ไม่พบช่องใส่รูปในไฟล์นี้ ให้เจาะช่องรูปเป็นพื้นหลังโปร่งใสในโปรแกรมออกแบบ (Canva: ส่งออกเป็น PNG พื้นหลังโปร่งใส) แล้วลองใหม่' : 'No transparent photo windows were found. Cut the photo areas out as transparent in your design tool (in Canva, export as PNG with a transparent background) and try again.'); return;
         }
-        if (!(SUPPORTED_OPENING_COUNTS as readonly number[]).includes(openings.length)) {
-          onMessage(th ? `พบช่องใส่รูป ${openings.length} ช่อง แต่เทมเพลตรองรับ 1, 2 หรือ 4 ช่อง` : `Found ${openings.length} photo windows, but templates support 1, 2 or 4.`); return;
-        }
-        const count = openings.length as 1 | 2 | 4;
-        const targetHeight = canvasHeightFor(count);
-        if (stretchNeeded(bitmap.width, bitmap.height, count) > 0.2) {
-          const ratio = count === 1 ? '4:5' : count === 2 ? '2:3' : '3:4';
-          onMessage(th ? `สัดส่วนไฟล์ ${bitmap.width} × ${bitmap.height} ไม่เหมาะกับ ${count} ช่อง ควรเป็นสัดส่วน ${ratio} (เช่น 1200 × ${targetHeight})` : `A ${bitmap.width} × ${bitmap.height} design does not fit a ${count}-photo layout. Use a ${ratio} shape (for example 1200 × ${targetHeight}).`); return;
-        }
+        if (!(SUPPORTED_OPENING_COUNTS as readonly number[]).includes(openings.length)) {
+          onMessage(th ? `พบช่องใส่รูป ${openings.length} ช่อง แต่เทมเพลตรองรับ 1, 2, 3 หรือ 4 ช่อง` : `Found ${openings.length} photo windows, but templates support 1 to 4.`); return;
+        }
+        const count = openings.length as TemplateCount;
+        const designSize = bestSizeFor(bitmap.width, bitmap.height, count);
+        if (!designSize) {
+          const fitting = TEMPLATE_SIZES.filter(item => item.id !== 'classic' && item.counts.includes(count)).map(item => `${item.ratio} (${th ? item.th : item.en})`).join(', ');
+          onMessage(th ? `สัดส่วนไฟล์ ${bitmap.width} × ${bitmap.height} ไม่ตรงกับขนาดใดที่รองรับสำหรับ ${count} ช่อง ใช้สัดส่วนเหล่านี้: ${fitting}` : `A ${bitmap.width} × ${bitmap.height} design does not match a size that offers ${count} photo${count === 1 ? '' : 's'}. Use one of: ${fitting}.`); return;
+        }
+        const target = canvasSize(designSize, count);
         const canvas = document.createElement('canvas');
-        canvas.width = 1200; canvas.height = targetHeight;
+        canvas.width = target.width; canvas.height = target.height;
         const context = canvas.getContext('2d', { willReadFrequently: true });
         if (!context) throw new Error('canvas unavailable');
-        context.drawImage(bitmap, 0, 0, 1200, targetHeight);
+        context.drawImage(bitmap, 0, 0, target.width, target.height);
         let blob: Blob | null = null; let reduced = false;
         for (const levels of [0, 64, 32, 16]) {
-          if (levels) { const pixels = context.getImageData(0, 0, 1200, targetHeight); posterize(pixels, levels); context.putImageData(pixels, 0, 0); reduced = true; }
+          if (levels) { const pixels = context.getImageData(0, 0, target.width, target.height); posterize(pixels, levels); context.putImageData(pixels, 0, 0); reduced = true; }
           blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
           if (blob && blob.size <= 500 * 1024) break;
         }
@@ -376,9 +379,9 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
           onMessage(th ? 'ไฟล์ดีไซน์ละเอียดเกินไปจนบีบให้ต่ำกว่า 500 KB ไม่ได้ ลองลดรายละเอียดหรือจำนวนสีของภาพ' : 'This design is too detailed to fit in 500 KB. Simplify the artwork or reduce its colours.'); return;
         }
         const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read')); reader.onerror = () => reject(new Error('read')); reader.readAsDataURL(blob as Blob); });
-        setTemplate(current => ({ ...current, count, overlay: dataUrl, slots: openings }));
+        setTemplate(current => ({ ...current, count, size: designSize, overlay: dataUrl, slots: openings }));
         setSelected([]);
-        onMessage(th ? `นำเข้าดีไซน์แล้ว พบช่องใส่รูป ${count} ช่อง${reduced ? ' (ลดจำนวนสีเพื่อให้ไฟล์เล็กลง)' : ''} ตรวจตำแหน่งช่องรูปด้านล่างได้` : `Design imported: ${count} photo window${count === 1 ? '' : 's'} found${reduced ? ' (colours reduced to fit the size limit)' : ''}. You can fine-tune the openings below.`);
+        onMessage(th ? `นำเข้าดีไซน์แล้ว ขนาด ${sizeInfo(designSize).th} พบช่องใส่รูป ${count} ช่อง${reduced ? ' (ลดจำนวนสีเพื่อให้ไฟล์เล็กลง)' : ''} ตรวจตำแหน่งช่องรูปด้านล่างได้` : `Design imported as ${sizeInfo(designSize).en}: ${count} photo window${count === 1 ? '' : 's'} found${reduced ? ' (colours reduced to fit the size limit)' : ''}. You can fine-tune the openings below.`);
       } finally { bitmap.close(); }
     } catch { onMessage(th ? 'ไฟล์ PNG นี้เปิดไม่ได้' : 'This PNG could not be opened.'); }
   }
@@ -389,11 +392,11 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     }
     try {
       const bitmap = await createImageBitmap(file);
-      const expectedHeight = template.count === 1 ? 1500 : template.count === 2 ? 1800 : 1600;
-      const validSize = bitmap.width === 1200 && bitmap.height === expectedHeight;
+      const expected = canvasSize(template.size, template.count);
+      const validSize = bitmap.width === expected.width && bitmap.height === expected.height;
       bitmap.close();
       if (!validSize) {
-        onMessage(th ? `ขนาดกรอบต้องเป็น 1200 × ${expectedHeight} พิกเซล ให้ตรงกับเลย์เอาต์ปัจจุบัน` : `Frame must be 1200 × ${expectedHeight} pixels for the selected layout.`);
+        onMessage(th ? `ขนาดกรอบต้องเป็น ${expected.width} × ${expected.height} พิกเซล ให้ตรงกับขนาดปัจจุบัน` : `Frame must be ${expected.width} × ${expected.height} pixels for the selected size.`);
         return;
       }
       const reader = new FileReader();
@@ -443,7 +446,16 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     try {
       const output = document.createElement('canvas');
       await drawComposition(output, available, template, th);
-      const blob = await new Promise<Blob>((resolve, reject) => output.toBlob(value => value ? resolve(value) : reject(new Error('Could not create print image.')), 'image/png'));
+      // A 2x6 strip is printed twice side by side on one sheet (a 4x6 sheet cut in half gives two strips).
+      let printable = output;
+      if (template.size === 'strip' && stripTwoUp) {
+        printable = document.createElement('canvas');
+        printable.width = output.width * 2; printable.height = output.height;
+        const sheet = printable.getContext('2d');
+        if (!sheet) throw new Error('Could not create the print sheet.');
+        sheet.drawImage(output, 0, 0); sheet.drawImage(output, output.width, 0);
+      }
+      const blob = await new Promise<Blob>((resolve, reject) => printable.toBlob(value => value ? resolve(value) : reject(new Error('Could not create print image.')), 'image/png'));
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const job = await window.koko.submitPrintImage(bytes, { printerName, paper, landscape, copies });
       setPrintJobs(current => [job, ...current].slice(0, 8));
@@ -458,11 +470,12 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     <p className="lead">{th ? 'เลือกภาพจากคลัง จัดวาง และส่งออกเป็นภาพ PNG ได้ทันที' : 'Choose photos from your library, arrange them, and export a finished PNG.'}{printEnabled ? (th ? ' หรือเปิดกล่องพิมพ์ของระบบ' : ' or open your system print dialog.') : ''}</p>
     <div className="template-layout">
       <section className="template-controls">
-        {printEnabled && <><fieldset className="print-options"><legend>{th ? 'ตัวเลือกพิมพ์' : 'Print options'}</legend><label>{th ? 'เครื่องพิมพ์' : 'Printer'}<select value={printerName} onChange={event => setPrinterName(event.target.value)}><option value="">{th ? 'เลือกในกล่องพิมพ์ของระบบ' : 'Choose in system print dialog'}</option><option value="__koko_simulated_printer__">{th ? 'จำลองการพิมพ์ (ไม่ใช้เครื่องจริง)' : 'Simulate print (no printer needed)'}</option>{printers.map(printer => <option key={printer.name} value={printer.name}>{printer.displayName || printer.name}</option>)}</select></label><label>{th ? 'กระดาษ' : 'Paper'}<select value={paper} onChange={event => setPaper(event.target.value as PrintOptionsSnapshot['paper'])}><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option><option value="4x6">4 × 6 in</option></select></label><label className="switch"><span>{th ? 'แนวนอน' : 'Landscape'}</span><input type="checkbox" checked={landscape} onChange={event => setLandscape(event.target.checked)} /></label><label>{th ? 'จำนวนสำเนา' : 'Copies'}<input type="number" min={1} max={10} value={copies} onChange={event => setCopies(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} /></label><button className="camera-secondary" type="button" onClick={() => void window.koko.listPrintPrinters().then(setPrinters).catch(error => onMessage(error instanceof Error ? error.message : 'Printer scan failed.'))}>{th ? 'ค้นหาเครื่องพิมพ์' : 'Refresh printers'}</button></fieldset><section className="print-job-list"><strong>{th ? 'คิวและประวัติพิมพ์' : 'Print queue and history'}</strong>{printJobs.length ? printJobs.map(job => <div key={job.id} className="print-job-row"><span>{job.options.printerName || (th ? 'กล่องพิมพ์ระบบ' : 'System dialog')} · {job.options.paper} · {job.options.copies}× · {job.status}{job.error ? ` · ${job.error}` : ''}</span>{job.status === 'failed' && <button type="button" className="text-link" onClick={() => void window.koko.retryPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ลองใหม่' : 'Retry'}</button>}{job.status === 'pending' && <button type="button" className="text-link" onClick={() => void window.koko.cancelPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>) : <p className="muted">{th ? 'ยังไม่มีงานพิมพ์' : 'No print jobs yet.'}</p>}<small>{th ? 'สถานะส่งแล้วหมายถึง Windows รับงานเข้าคิว ไม่ได้ยืนยันผลพิมพ์จริง' : 'Submitted means Windows accepted the job; it does not confirm paper output.'}</small></section></>}
+        {printEnabled && <><fieldset className="print-options"><legend>{th ? 'ตัวเลือกพิมพ์' : 'Print options'}</legend>{template.size === 'strip' && <label className="print-two-up"><input type="checkbox" checked={stripTwoUp} onChange={event => setStripTwoUp(event.target.checked)} /> {th ? 'พิมพ์ 2 แถบต่อแผ่น (เลือกกระดาษ 4×6 แล้วตัดครึ่ง)' : 'Print 2 strips per sheet (use 4×6 paper, cut in half)'}</label>}<label>{th ? 'เครื่องพิมพ์' : 'Printer'}<select value={printerName} onChange={event => setPrinterName(event.target.value)}><option value="">{th ? 'เลือกในกล่องพิมพ์ของระบบ' : 'Choose in system print dialog'}</option><option value="__koko_simulated_printer__">{th ? 'จำลองการพิมพ์ (ไม่ใช้เครื่องจริง)' : 'Simulate print (no printer needed)'}</option>{printers.map(printer => <option key={printer.name} value={printer.name}>{printer.displayName || printer.name}</option>)}</select></label><label>{th ? 'กระดาษ' : 'Paper'}<select value={paper} onChange={event => setPaper(event.target.value as PrintOptionsSnapshot['paper'])}><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option><option value="4x6">4 × 6 in</option></select></label><label className="switch"><span>{th ? 'แนวนอน' : 'Landscape'}</span><input type="checkbox" checked={landscape} onChange={event => setLandscape(event.target.checked)} /></label><label>{th ? 'จำนวนสำเนา' : 'Copies'}<input type="number" min={1} max={10} value={copies} onChange={event => setCopies(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} /></label><button className="camera-secondary" type="button" onClick={() => void window.koko.listPrintPrinters().then(setPrinters).catch(error => onMessage(error instanceof Error ? error.message : 'Printer scan failed.'))}>{th ? 'ค้นหาเครื่องพิมพ์' : 'Refresh printers'}</button></fieldset><section className="print-job-list"><strong>{th ? 'คิวและประวัติพิมพ์' : 'Print queue and history'}</strong>{printJobs.length ? printJobs.map(job => <div key={job.id} className="print-job-row"><span>{job.options.printerName || (th ? 'กล่องพิมพ์ระบบ' : 'System dialog')} · {job.options.paper} · {job.options.copies}× · {job.status}{job.error ? ` · ${job.error}` : ''}</span>{job.status === 'failed' && <button type="button" className="text-link" onClick={() => void window.koko.retryPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ลองใหม่' : 'Retry'}</button>}{job.status === 'pending' && <button type="button" className="text-link" onClick={() => void window.koko.cancelPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>) : <p className="muted">{th ? 'ยังไม่มีงานพิมพ์' : 'No print jobs yet.'}</p>}<small>{th ? 'สถานะส่งแล้วหมายถึง Windows รับงานเข้าคิว ไม่ได้ยืนยันผลพิมพ์จริง' : 'Submitted means Windows accepted the job; it does not confirm paper output.'}</small></section></>}
         <fieldset className="template-presets"><legend>{th ? 'เริ่มจากแบบสำเร็จรูป' : 'Start from a preset'}</legend><div className="template-preset-grid">{TEMPLATE_PRESETS.map(preset => <button type="button" key={preset.id} onClick={() => setTemplate(current => applyTemplatePreset(current, preset, th ? 'th' : 'en'))}><strong>{preset.name[th ? 'th' : 'en']}</strong><small>{preset.count} {th ? 'ภาพ' : preset.count === 1 ? 'photo' : 'photos'}</small></button>)}</div><small className="muted">{th ? 'ปรับข้อความ สี โลโก้ และกรอบต่อได้ทุกส่วน' : 'You can still edit the text, colours, logo and frame afterwards.'}</small></fieldset>
         <label className="template-field">{th ? 'ชื่อเทมเพลต' : 'Template name'}<input value={template.name} maxLength={60} onChange={event => update('name', event.target.value)} placeholder={th ? 'เช่น งานวันเกิด' : 'e.g. Birthday'} /></label>
         <div className="template-field"><span>{th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}</span><div className="template-options" role="group" aria-label={th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}>{(['photo', 'video'] as const).map(mode => <button type="button" key={mode} className={(template.mediaMode ?? 'photo') === mode ? 'selected' : ''} aria-pressed={(template.mediaMode ?? 'photo') === mode} onClick={() => setTemplate(current => ({ ...current, mediaMode: mode === 'video' ? 'video' : undefined }))}>{mode === 'photo' ? (th ? 'ภาพถ่าย' : 'Photos') : (th ? 'วิดีโอ' : 'Video clip')}</button>)}</div></div>
-        <div className="template-field"><span>{th ? 'เลย์เอาต์' : 'Layout'}</span><div className="template-options">{([1, 2, 4] as const).map(count => <button type="button" key={count} className={template.count === count ? 'selected' : ''} aria-pressed={template.count === count} onClick={() => { if (template.count !== count) setTemplate(current => ({ ...current, count, overlay: '', slots: undefined })); setSelected([]); }}>{count} {th ? 'ภาพ' : count === 1 ? 'photo' : 'photos'}</button>)}</div></div>
+        <div className="template-field"><span>{th ? 'ขนาดและรูปแบบ' : 'Size and shape'}</span><div className="template-size-grid" role="group" aria-label={th ? 'ขนาดและรูปแบบ' : 'Size and shape'}>{TEMPLATE_SIZES.map(info => <button type="button" key={info.id} className={(template.size ?? 'classic') === info.id ? 'selected' : ''} aria-pressed={(template.size ?? 'classic') === info.id} title={th ? info.hintTh : info.hintEn} onClick={() => { if ((template.size ?? 'classic') !== info.id) { setTemplate(current => ({ ...current, size: info.id === 'classic' ? undefined : info.id, count: countAfterSizeChange(info.id, current.count), overlay: '', slots: undefined })); setSelected([]); } }}><strong>{th ? info.th : info.en}</strong><small>{info.ratio}</small></button>)}</div><small className="muted">{th ? sizeInfo(template.size).hintTh : sizeInfo(template.size).hintEn} · {canvasSize(template.size, template.count).width} × {canvasSize(template.size, template.count).height} px</small></div>
+        <div className="template-field"><span>{th ? 'จำนวนรูป' : 'Photos'}</span><div className="template-options">{allowedCounts(template.size).map(count => <button type="button" key={count} className={template.count === count ? 'selected' : ''} aria-pressed={template.count === count} onClick={() => { if (template.count !== count) setTemplate(current => ({ ...current, count, overlay: '', slots: undefined })); setSelected([]); }}>{count} {th ? 'ภาพ' : count === 1 ? 'photo' : 'photos'}</button>)}</div></div>
         <FontSelect label={th ? 'ฟอนต์หัวภาพและท้ายภาพ' : 'Title and footer font'} value={template.fontId} th={th} onMessage={onMessage} onChange={fontId => update('fontId', fontId)} />
         <label className="template-field">{th ? 'ข้อความหัวภาพ' : 'Title'}<input value={template.title} maxLength={60} onChange={event => update('title', event.target.value)} /></label>
         <label className="template-field">{th ? 'ข้อความท้ายภาพ' : 'Footer text'}<input value={template.footer} maxLength={80} onChange={event => update('footer', event.target.value)} /></label>
@@ -475,7 +488,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <label className="template-field">{th ? 'นำเข้าดีไซน์ของคุณ (PNG ที่เจาะช่องใส่รูปโปร่งใส)' : 'Import your own design (PNG with transparent photo windows)'}<input type="file" accept="image/png" onChange={event => { const input = event.currentTarget; const chosen = input.files?.[0]; input.value = ''; void uploadDesign(chosen); }} /></label>
         <small className="muted">{th ? 'แอปหาช่องใส่รูปให้เอง รองรับ 1, 2 หรือ 4 ช่อง ใช้ไฟล์จาก Canva หรือ Photoshop ได้ สัดส่วนควรเป็น 4:5 (1 ช่อง), 2:3 (2 ช่อง) หรือ 3:4 (4 ช่อง)' : 'The app finds the photo windows for you (1, 2 or 4). Works with exports from Canva or Photoshop. Use a 4:5 shape for 1 photo, 2:3 for 2, or 3:4 for 4.'}</small>
         <label className="template-field">{th ? 'กรอบ PNG โปร่งใส (ไม่เกิน 500 KB)' : 'Transparent PNG frame (up to 500 KB)'}<input type="file" accept="image/png" onChange={event => void uploadFrame(event.target.files?.[0])} /></label>
-        <small className="muted">{th ? 'ทำไฟล์ขนาด 1200 × 1500 (1 ภาพ), 1200 × 1800 (2 ภาพ) หรือ 1200 × 1600 (4 ภาพ) โดยเว้นช่องรูปเป็นพื้นหลังโปร่งใส' : 'Use 1200 × 1500 (1 photo), 1200 × 1800 (2 photos), or 1200 × 1600 (4 photos), with transparent openings for the photos.'}</small>
+        <small className="muted">{th ? `ทำไฟล์ขนาด ${canvasSize(template.size, template.count).width} × ${canvasSize(template.size, template.count).height} พิกเซลสำหรับขนาดนี้ โดยเว้นช่องรูปเป็นพื้นหลังโปร่งใส` : `Use ${canvasSize(template.size, template.count).width} × ${canvasSize(template.size, template.count).height} pixels for this size, with transparent openings for the photos.`}</small>
         {template.overlay && <button type="button" className="text-link" onClick={() => update('overlay', '')}>{th ? 'นำกรอบออก' : 'Remove frame'}</button>}
         <TextLayersEditor onMessage={onMessage} title={th ? 'ข้อความบนภาพถ่าย' : 'Photo text layers'} layers={template.textLayers ?? []} th={th} onChange={layers => update('textLayers', layers)} />
         <ImageLayersEditor title={th ? 'สติกเกอร์ภาพถ่าย' : 'Photo stickers'} layers={template.imageLayers ?? []} th={th} onUpload={file => uploadSticker(file, 'photo-image')} onChange={layers => update('imageLayers', layers)} />
@@ -515,13 +528,13 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <section className="photo-slot-designer">
           <div className="template-photo-heading"><strong>{th ? 'จัดตำแหน่งช่องภาพ' : 'Position photo openings'}</strong><button type="button" className="text-link" onClick={resetPhotoSlots}>{th ? 'คืนค่าเลย์เอาต์' : 'Reset layout'}</button></div>
           <p className="muted">{th ? 'ลากกรอบเพื่อย้าย ลากมุมล่างขวาเพื่อปรับขนาด หรือใช้แถบเลื่อนปรับละเอียด' : 'Drag a box to move it, drag its lower right corner to resize, or use the sliders for precise placement.'}</p>
-          <div ref={slotEditorRef} className="photo-slot-editor" style={{ aspectRatio: `1200 / ${canvasHeight}`, background: template.background }} onPointerMove={moveSlotDrag} onPointerUp={finishSlotDrag} onPointerCancel={finishSlotDrag}>
+          <div ref={slotEditorRef} className="photo-slot-editor" style={{ aspectRatio: `${canvasWidth} / ${canvasHeight}`, background: template.background }} onPointerMove={moveSlotDrag} onPointerUp={finishSlotDrag} onPointerCancel={finishSlotDrag}>
             {photoSlots.map((slot, index) => <div key={index} className="photo-slot-box" role="group" aria-label={`${th ? 'ช่องภาพ' : 'Photo opening'} ${index + 1}`} style={{ left: `${slot.x}%`, top: `${slot.y}%`, width: `${slot.width}%`, height: `${slot.height}%`, borderColor: template.frame }} onPointerDown={event => startSlotDrag(event, index, 'move')}>
               <span>{index + 1}</span><button type="button" aria-label={`${th ? 'ปรับขนาดช่องภาพ' : 'Resize photo opening'} ${index + 1}`} onPointerDown={event => startSlotDrag(event, index, 'resize')} onClick={event => event.stopPropagation()} />
             </div>)}
             {template.overlay && <img className="photo-slot-overlay" src={template.overlay} alt="" draggable={false} />}
             {(template.imageLayers ?? []).map((layer, index) => <div key={layer.id} className="sticker-placement" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%` }} onPointerDown={event => startSlotDrag(event, index, 'move', 'photo-image')}><img src={layer.src} alt="" draggable={false} /><button type="button" aria-label={`${th ? 'ปรับขนาดสติกเกอร์' : 'Resize sticker'} ${index + 1}`} onPointerDown={event => startSlotDrag(event, index, 'resize', 'photo-image')} onClick={event => event.stopPropagation()} /></div>)}
-            {(template.textLayers ?? []).map(layer => <span key={layer.id} className="template-text-preview-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontFamily: fontStack(layer.fontId), fontSize: `${layer.fontSize * canvasHeight / 1200}cqw`, textAlign: layer.align }}>{layer.text}</span>)}
+            {(template.textLayers ?? []).map(layer => <span key={layer.id} className="template-text-preview-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontFamily: fontStack(layer.fontId), fontSize: `${layer.fontSize * canvasHeight / canvasWidth}cqw`, textAlign: layer.align }}>{layer.text}</span>)}
           </div>
           <div className="photo-slot-control-list">{photoSlots.map((slot, index) => <fieldset className="photo-slot-controls" key={index}><legend>{th ? `ช่องภาพ ${index + 1}` : `Photo ${index + 1}`}</legend>
             <label>X <input type="range" min="0" max={Math.max(0, 100 - slot.width)} step="0.5" value={slot.x} onChange={event => updateSlot(index, { ...slot, x: Number(event.target.value) })} /><output>{slot.x.toFixed(1)}%</output></label>

@@ -1,19 +1,30 @@
+import { canvasSize, sizeInfo, type TemplateCount, type TemplateSizeId } from '../shared/template-size.ts';
 export type PhotoSlot = { x: number; y: number; width: number; height: number };
 export type PixelRect = { x: number; y: number; width: number; height: number };
 
-export function defaultPhotoSlots(count: 1 | 2 | 4, title: string, logo: string, footer: string, showDate: boolean): PhotoSlot[] {
-  const width = 1200;
-  const height = count === 1 ? 1500 : count === 2 ? 1800 : 1600;
-  const top = title || logo ? 190 : 90;
-  const footerHeight = footer || showDate ? 190 : 90;
-  const gap = 24;
-  const side = 82;
+/** Grid (columns x rows) used for a photo count in each size: strips stack, landscape sizes run in a row, four photos make a 2 x 2 grid. */
+export function slotGrid(count: TemplateCount, flow: 'portrait' | 'landscape' | 'strip'): { columns: number; rows: number } {
+  if (count === 4 && flow !== 'strip') return { columns: 2, rows: 2 };
+  if (flow === 'landscape') return { columns: count, rows: 1 };
+  return { columns: 1, rows: count };
+}
+
+export function defaultPhotoSlots(count: TemplateCount, title: string, logo: string, footer: string, showDate: boolean, size?: TemplateSizeId): PhotoSlot[] {
+  const info = sizeInfo(size);
+  const { width, height } = canvasSize(size, count);
+  const unit = Math.min(width, height) / 1200;
+  const top = (title || logo ? 190 : 90) * unit;
+  const footerHeight = (footer || showDate ? 190 : 90) * unit;
+  const gap = 24 * unit;
+  const side = 82 * unit;
+  const areaWidth = width - side * 2;
   const areaHeight = height - top - footerHeight - side;
-  const boxes = count === 1
-    ? [{ x: side, y: top, width: width - side * 2, height: areaHeight }]
-    : count === 2
-      ? [0, 1].map(index => ({ x: side, y: top + index * (areaHeight + gap) / 2, width: width - side * 2, height: (areaHeight - gap) / 2 }))
-      : [0, 1, 2, 3].map(index => ({ x: side + (index % 2) * (width - side * 2 + gap) / 2, y: top + Math.floor(index / 2) * (areaHeight + gap) / 2, width: (width - side * 2 - gap) / 2, height: (areaHeight - gap) / 2 }));
+  const { columns, rows } = slotGrid(count, info.flow);
+  const boxWidth = (areaWidth - gap * (columns - 1)) / columns;
+  const boxHeight = (areaHeight - gap * (rows - 1)) / rows;
+  const boxes = Array.from({ length: count }, (_, index) => ({
+    x: side + (index % columns) * (boxWidth + gap), y: top + Math.floor(index / columns) * (boxHeight + gap), width: boxWidth, height: boxHeight
+  }));
   return boxes.map(box => ({ x: box.x / width * 100, y: box.y / height * 100, width: box.width / width * 100, height: box.height / height * 100 }));
 }
 

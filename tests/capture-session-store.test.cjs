@@ -130,3 +130,16 @@ test('accepts font ids on a template and its text layers and rejects malformed o
   assert.throws(() => validateCaptureTemplate({ ...template, fontId: '../../x' }), /Invalid capture template/);
   assert.throws(() => validateCaptureTemplate({ ...template, textLayers: [{ ...layer, fontId: 'zz' }] }), /Invalid capture template/);
 });
+
+test('accepts the new sizes with their photo counts and rejects mismatches', () => {
+  const strip3 = { ...template, size: 'strip', count: 3, slots: undefined, textLayers: [] };
+  assert.equal(validateCaptureTemplate(strip3).size, 'strip');
+  assert.equal(validateCaptureTemplate(strip3).count, 3);
+  assert.equal(validateCaptureTemplate({ ...strip3, count: 4 }).count, 4);
+  assert.equal(validateCaptureTemplate({ ...strip3, size: 'landscape' }).size, 'landscape');
+  assert.throws(() => validateCaptureTemplate({ ...strip3, count: 1 }), /Invalid capture template/);
+  assert.throws(() => validateCaptureTemplate({ ...template, size: undefined, count: 3, slots: undefined, textLayers: [] }), /Invalid capture template/);
+  assert.throws(() => validateCaptureTemplate({ ...strip3, size: 'poster' }), /Invalid capture template/);
+  assert.equal(validateCaptureTemplate({ ...template, size: undefined }).size, undefined);
+  assert.throws(() => validateCaptureTemplate({ ...strip3, slots: [{ x: 10, y: 10, width: 80, height: 20 }, { x: 10, y: 40, width: 80, height: 20 }] }), /Invalid capture template/);
+});

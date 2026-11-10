@@ -2,6 +2,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { CaptureSessionRecord, CaptureTemplateSnapshot } from '../../shared/contract';
+import { countAllowed, isTemplateSize, type TemplateCount } from '../../shared/template-size.ts';
 
 type SessionIndex = { schemaVersion: 1; sessions: CaptureSessionRecord[] };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,7 +48,8 @@ export function validateCaptureTemplate(value: unknown): CaptureTemplateSnapshot
   const item = value as Record<string, unknown>;
   if (typeof item.id !== 'string' || item.id.length < 1 || item.id.length > 80
     || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 60
-    || ![1, 2, 4].includes(item.count as number)
+    || (item.size !== undefined && !isTemplateSize(item.size))
+    || !countAllowed(item.size as undefined, item.count)
     || typeof item.title !== 'string' || item.title.length > 60
     || typeof item.footer !== 'string' || item.footer.length > 80
     || typeof item.background !== 'string' || !COLOR.test(item.background)
@@ -62,8 +64,8 @@ export function validateCaptureTemplate(value: unknown): CaptureTemplateSnapshot
     || (item.videoImageLayers !== undefined && (!Array.isArray(item.videoImageLayers) || item.videoImageLayers.length > 4 || !item.videoImageLayers.every(validImageLayer)))
     || (item.overlay !== undefined && item.overlay !== '' && (typeof item.overlay !== 'string' || item.overlay.length > 700_000
       || !/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(item.overlay)))) throw new Error('Invalid capture template');
-  return { id: item.id, name: item.name.trim(), count: item.count as 1 | 2 | 4, title: item.title, footer: item.footer,
-    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.fontId === 'string' ? { fontId: item.fontId } : {}), ...(typeof item.overlay === 'string' && item.overlay ? { overlay: item.overlay } : {}),
+  return { id: item.id, name: item.name.trim(), count: item.count as TemplateCount, title: item.title, footer: item.footer,
+    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.fontId === 'string' ? { fontId: item.fontId } : {}), ...(typeof item.size === 'string' ? { size: item.size as CaptureTemplateSnapshot['size'] } : {}), ...(typeof item.overlay === 'string' && item.overlay ? { overlay: item.overlay } : {}),
     ...(Array.isArray(item.slots) ? { slots: item.slots as Array<{ x: number; y: number; width: number; height: number }> } : {}),
     ...(Array.isArray(item.textLayers) ? { textLayers: item.textLayers as CaptureTemplateSnapshot['textLayers'] } : {}),
     ...(Array.isArray(item.videoTextLayers) ? { videoTextLayers: item.videoTextLayers as CaptureTemplateSnapshot['videoTextLayers'] } : {}),

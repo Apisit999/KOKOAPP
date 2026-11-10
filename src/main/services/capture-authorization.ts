@@ -9,7 +9,7 @@ export class CaptureAuthorizationRegistry {
   begin(photoCount: unknown, eventIdOrNow: string | null | number = null, timestamp = Date.now(), sessionId: string = randomUUID()) {
     const now = typeof eventIdOrNow === 'number' ? eventIdOrNow : timestamp;
     const eventId = typeof eventIdOrNow === 'string' ? eventIdOrNow : null;
-    if (!Number.isSafeInteger(photoCount) || ![1, 2, 4].includes(photoCount as number)) {
+    if (!Number.isSafeInteger(photoCount) || ![1, 2, 3, 4].includes(photoCount as number)) {
       throw new Error('Invalid session photo count');
     }
     if (eventId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) throw new Error('Invalid event ID');

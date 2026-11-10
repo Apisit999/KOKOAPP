@@ -301,6 +301,13 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 @keyframes guest-slide-in { from { opacity: 0 } to { opacity: 1 } }
 @media (prefers-reduced-motion: reduce) { .guest-display-slide { animation: none } }
 
+.template-size-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px }
+.template-size-grid button { display: grid; gap: 2px; min-height: 52px; padding: 8px 10px; text-align: left; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: transparent; color: inherit; cursor: pointer }
+.template-size-grid button.selected { border-color: rgba(214,179,106,.8); background: rgba(214,179,106,.1) }
+.template-size-grid button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
+.template-size-grid strong { font-size: var(--fs-md); font-weight: 600 }
+.template-size-grid small { color: #8d8c85; font-size: var(--fs-base) }
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }

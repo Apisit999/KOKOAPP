@@ -64,7 +64,8 @@ async function waitFor(win, js, label, timeout = 15000) {
 const clickButton = (win, scope, text) => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll(${JSON.stringify(scope)})).find(x => x.textContent.trim() === ${JSON.stringify(text)}); if (b) b.click(); return Boolean(b); })()`);
 const clickCount = (win, n) => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll('[aria-label="Photos per session"] button')).find(x => x.textContent.trim().startsWith(${JSON.stringify(String(n))})); if (b) b.click(); return Boolean(b); })()`);
 const step = (name, data) => report.steps.push({ name, ...data });
-const shot = async (win, name) => fs.writeFileSync(path.join(output, `${name}.png`), (await win.webContents.capturePage()).toPNG());
+// Screenshots are evidence for a human, not a pass/fail signal: a compositor hiccup (UnknownVizError) must not fail a run.
+const shot = async (win, name) => { try { fs.writeFileSync(path.join(output, `${name}.png`), (await win.webContents.capturePage()).toPNG()); } catch (error) { (report.screenshotErrors ||= []).push(`${name}: ${error.message}`); } };
 
 app.on('browser-window-created', (_event, win) => {
   if (started) return;
@@ -705,10 +706,10 @@ app.on('browser-window-created', (_event, win) => {
         stage = 'design refused files';
         await upload(600, 900, [], '#3a2a6a', 'no-windows.png');
         await waitFor(win, `document.body.innerText.includes('No transparent photo windows')`, 'no-windows message', 10000);
-        await upload(600, 900, [[60, 100, 480, 200], [60, 350, 480, 200], [60, 600, 480, 200]], '#3a2a6a', 'three-windows.png');
-        await waitFor(win, `document.body.innerText.includes('Found 3 photo windows')`, 'three-windows message', 10000);
-        await upload(1920, 1080, [[100, 100, 800, 800], [1020, 100, 800, 800]], '#3a2a6a', 'wrong-shape.png');
-        await waitFor(win, `document.body.innerText.includes('does not fit a 2-photo layout')`, 'wrong-shape message', 10000);
+        await upload(600, 900, [[60, 60, 200, 200], [340, 60, 200, 200], [60, 340, 200, 200], [340, 340, 200, 200], [60, 620, 200, 200]], '#3a2a6a', 'five-windows.png');
+        await waitFor(win, `document.body.innerText.includes('Found 5 photo windows')`, 'five-windows message', 10000);
+        await upload(3000, 1000, [[100, 100, 800, 800], [1100, 100, 800, 800]], '#3a2a6a', 'wrong-shape.png');
+        await waitFor(win, `document.body.innerText.includes('does not match a size that offers 2 photos')`, 'wrong-shape message', 10000);
         step('design-refused', { noWindows: true, threeWindows: true, wrongShape: true });
         // The good design: 1500x2250, windows at 150,300 1200x800 and 150,1250 1200x800 (percent: x 10, w 80, y 13.3 / 55.6, h 35.6).
         stage = 'design import';
@@ -841,6 +842,71 @@ app.on('browser-window-created', (_event, win) => {
           && stoppedDuringReview && afterIds.length === expectedIds.length + 1 && afterIds[0] !== expectedIds[0] && afterIds.slice(1).join() === expectedIds.join() && offList.ids.length === 0;
         report.slideshowOk = ok;
         if (!ok) throw new Error('Slideshow check failed, see steps');
+      } else if (phase === 'sizes') {
+        // Every template size: pick it in the editor, then take a real Guest round and look at the composed picture
+        // (canvas size, and how many photo windows run along the middle of it). Run after `first` on a profile not in Guest mode.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        stage = 'sizes editor';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        await clickButton(win, '.sidebar nav button', 'Templates');
+        await waitFor(win, `Boolean(document.querySelector('.template-size-grid'))`, 'size picker', 10000);
+        const pickSize = label => evaluate(win, `(() => { const b = Array.from(document.querySelectorAll('.template-size-grid button')).find(x => x.querySelector('strong').textContent.trim() === ${JSON.stringify(label)}); if (!b) return false; b.click(); return true; })()`);
+        const countsShown = () => evaluate(win, `Array.from(document.querySelectorAll('.template-field')).find(l => l.querySelector('span') && l.querySelector('span').textContent === 'Photos').querySelectorAll('.template-options button').length ? Array.from(Array.from(document.querySelectorAll('.template-field')).find(l => l.querySelector('span') && l.querySelector('span').textContent === 'Photos').querySelectorAll('.template-options button')).map(b => ({ n: Number(b.textContent.trim().split(' ')[0]), on: b.getAttribute('aria-pressed') === 'true' })) : []`);
+        const sizesInUi = await evaluate(win, `Array.from(document.querySelectorAll('.template-size-grid button')).map(b => b.querySelector('strong').textContent.trim())`);
+        const stripPicked = await pickSize('Vertical photo strip 2×6 in');
+        await wait(300);
+        const stripCounts = await countsShown();
+        const stripNote = await evaluate(win, `Array.from(document.querySelectorAll('.template-field > small.muted')).map(x => x.textContent).find(t => t.includes('3600')) || ''`);
+        const presetStrip = await evaluate(win, `Array.from(document.querySelectorAll('.template-preset-grid button')).some(b => /Photo strip · 3 photos/.test(b.textContent))`);
+        step('sizes-editor', { sizesInUi, stripPicked, stripCounts, stripNote: stripNote.slice(0, 120), presetStrip });
+        const editorOk = sizesInUi.length === 7 && stripPicked && JSON.stringify(stripCounts) === JSON.stringify([{ n: 2, on: false }, { n: 3, on: true }, { n: 4, on: false }]) && stripNote.includes('1200 × 3600') && presetStrip;
+        // Guest rounds.
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        const cases = [
+          { id: 'strip', count: 3, w: 1200, h: 3600, axis: 'v', expect: 3 },
+          { id: 'strip', count: 4, w: 1200, h: 3600, axis: 'v', expect: 4 },
+          { id: 'postcard', count: 1, w: 1200, h: 1800, axis: 'v', expect: 1 },
+          { id: 'landscape', count: 3, w: 1800, h: 1200, axis: 'h', expect: 3 },
+          { id: 'square', count: 4, w: 1200, h: 1200, axis: 'grid', expect: 2 },
+          { id: 'story', count: 3, w: 1080, h: 1920, axis: 'v', expect: 3 },
+          { id: 'photo5x7', count: 2, w: 1200, h: 1680, axis: 'v', expect: 2 },
+          { id: undefined, count: 2, w: 1200, h: 1800, axis: 'v', expect: 2 }
+        ];
+        const results = [];
+        for (const item of cases) {
+          stage = `sizes round ${item.id || 'classic'} ${item.count}`;
+          const tpl = { id: 'qa-size', name: 'QA size', count: item.count, ...(item.id ? { size: item.id } : {}), title: '', footer: '', background: '#171714', frame: '#d6b36a', showDate: false, logo: '', overlay: '', videoOverlay: '', textLayers: [], videoTextLayers: [], imageLayers: [], videoImageLayers: [] };
+          await evaluate(win, `(() => { localStorage.setItem('koko.saved-templates.v1', JSON.stringify([${JSON.stringify(tpl)}])); localStorage.setItem('koko.guest-template.v1', 'qa-size'); })()`);
+          await win.loadFile(html, { query: { camera: 'simulated' } });
+          await wait(1000);
+          if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+            await evaluate(win, `document.querySelector('.brand-button').click()`);
+            await waitFor(win, hasText('Start Guest mode'), 'dashboard', 8000);
+            await clickButton(win, 'button', 'Start Guest mode');
+            await clickButton(win, 'button', 'Stay in Photobooth');
+          }
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+          await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+          win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 1280, height: 720 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 1280, height: 720 }, deviceScaleFactor: 1, scale: 1 });
+          await wait(800);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready', 20000);
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .guest-composition img')) && document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'composition', 90000);
+          await wait(800);
+          const m = await evaluate(win, `(async () => { const img = document.querySelector('.guest-capture .guest-composition img'); const b = await createImageBitmap(await (await fetch(img.src)).blob()); const c = document.createElement('canvas'); c.width = b.width; c.height = b.height; const x = c.getContext('2d'); x.drawImage(b, 0, 0); const bg = [0x17, 0x17, 0x14]; const far = d => Math.abs(d[0] - bg[0]) + Math.abs(d[1] - bg[1]) + Math.abs(d[2] - bg[2]) > 60; const runs = (cells) => { let n = 0; let inside = false; for (const d of cells) { const f = far(d); if (f && !inside) n++; inside = f; } return n; }; const col = []; for (let y = 0; y < b.height; y += 3) col.push(x.getImageData(Math.floor(b.width / 2), y, 1, 1).data); const row = []; for (let px = 0; px < b.width; px += 3) row.push(x.getImageData(px, Math.floor(b.height / 2), 1, 1).data); const colQ = []; for (let y = 0; y < b.height; y += 3) colQ.push(x.getImageData(Math.floor(b.width * 0.27), y, 1, 1).data); const rowQ = []; for (let px = 0; px < b.width; px += 3) rowQ.push(x.getImageData(px, Math.floor(b.height * 0.3), 1, 1).data); const buttons = Array.from(document.querySelectorAll('.guest-capture .review-actions button')).map(el => Math.round(el.getBoundingClientRect().bottom)); return { size: [b.width, b.height], vertical: runs(col), horizontal: runs(row), verticalQ: runs(colQ), horizontalQ: runs(rowQ), thumb: c.toDataURL('image/png'), buttons, innerHeight, overflowX: document.documentElement.scrollWidth > innerWidth }; })()`);
+          if (m.thumb) { fs.writeFileSync(path.join(output, `composed-${item.id || 'classic'}-${item.count}.png`), Buffer.from(m.thumb.split(',')[1], 'base64')); delete m.thumb; }
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready again', 20000);
+          win.webContents.disableDeviceEmulation();
+          const seen = item.axis === 'h' ? m.horizontal : item.axis === 'grid' ? m.verticalQ : m.vertical;
+          const entry = { size: item.id || 'classic', count: item.count, composition: m.size, expectedSize: [item.w, item.h], windowsAlongMiddle: seen, expectedWindows: item.expect, buttonsFit: m.buttons.every(b => b <= m.innerHeight), overflowX: m.overflowX };
+          entry.ok = m.size[0] === item.w && m.size[1] === item.h && seen === item.expect && (item.axis !== 'grid' || m.horizontalQ === 2) && entry.buttonsFit && !m.overflowX;
+          results.push(entry); step(`sizes-${entry.size}-${item.count}`, entry);
+        }
+        await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
+        report.sizesOk = editorOk && results.every(r => r.ok);
+        if (!report.sizesOk) throw new Error('Template sizes check failed: ' + JSON.stringify({ editorOk, failed: results.filter(r => !r.ok) }));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -918,5 +984,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "slideshow", "csp", "design", "fonts", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "sizes", "slideshow", "csp", "design", "fonts", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));

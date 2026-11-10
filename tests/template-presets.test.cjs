@@ -1,13 +1,15 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { TEMPLATE_PRESETS, PRESET_BACKGROUNDS, applyTemplatePreset } = require('../src/renderer/template-presets.ts');
+const { countAllowed, isTemplateSize } = require('../src/shared/template-size.ts');
 
 test('every preset is valid for the template editor', () => {
   const ids = new Set();
   for (const preset of TEMPLATE_PRESETS) {
     assert.ok(!ids.has(preset.id), `duplicate id ${preset.id}`);
     ids.add(preset.id);
-    assert.ok([1, 2, 4].includes(preset.count), `${preset.id} count`);
+    assert.ok(countAllowed(preset.size, preset.count), `${preset.id} count fits its size`);
+    assert.ok(preset.size === undefined || isTemplateSize(preset.size), `${preset.id} size`);
     assert.ok(PRESET_BACKGROUNDS.includes(preset.background), `${preset.id} background must be one of the editor's colours`);
     assert.match(preset.frame, /^#[0-9a-f]{6}$/i, `${preset.id} frame colour`);
     for (const language of ['th', 'en']) {

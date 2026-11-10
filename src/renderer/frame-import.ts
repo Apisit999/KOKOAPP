@@ -65,7 +65,7 @@ export function inReadingOrder(rects: Opening[]): Opening[] {
 }
 
 /** Layout counts the app supports. */
-export const SUPPORTED_OPENING_COUNTS = [1, 2, 4] as const;
+export const SUPPORTED_OPENING_COUNTS = [1, 2, 3, 4] as const;
 export const canvasHeightFor = (count: 1 | 2 | 4) => count === 1 ? 1500 : count === 2 ? 1800 : 1600;
 
 /** How much a design must be stretched to fill the 1200-wide canvas of the layout, as a fraction (0.05 = 5%). */

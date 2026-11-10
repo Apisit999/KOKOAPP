@@ -51,3 +51,13 @@ test('rejects bad font ids and font entries', () => {
   assert.throws(() => parseTemplateArchive(bad([{ id: fontId, name: 'A', data: 'not base64!' }])), /invalid font/);
   assert.throws(() => parseTemplateArchive(bad('x')), /up to 30 fonts/);
 });
+
+test('carries a template size and checks the photo count against it', () => {
+  const strip = { ...template, id: 'strip-1', size: 'strip', count: 3, slots: undefined };
+  const [restored] = parseTemplateArchive(exportTemplateArchive([strip]));
+  assert.equal(restored.size, 'strip'); assert.equal(restored.count, 3);
+  assert.throws(() => parseTemplateArchive(pack([{ ...strip, count: 1 }])), /invalid fields/);
+  assert.throws(() => parseTemplateArchive(pack([{ ...template, count: 3, slots: undefined }])), /invalid fields/);
+  assert.throws(() => parseTemplateArchive(pack([{ ...strip, size: 'huge' }])), /invalid fields/);
+  assert.equal(parseTemplateArchive(pack([template]))[0].size, undefined);
+});
