@@ -150,7 +150,7 @@ app.on('browser-window-created', (_event, win) => {
         const discBottom = `Math.round(document.querySelector('.guest-capture .capture-actions').getBoundingClientRect().bottom)`;
         const actionBottoms = `(() => { const bs = Array.from(document.querySelectorAll('.guest-capture .review-actions button')); return bs.map(b => Math.round(b.getBoundingClientRect().bottom)); })()`;
         const results = [];
-        for (const [w, h] of [[800, 1280], [1024, 768], [1280, 720], [1920, 1080]]) {
+        for (const [w, h] of [[800, 1280], [1024, 768], [1280, 720], [1366, 768], [1920, 1080]]) {
           stage = `guest ${w}x${h}`;
           win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
           await wait(900);
