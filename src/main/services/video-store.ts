@@ -129,7 +129,8 @@ export class VideoStore {
   private writeIndex(index: VideoIndex) {
     mkdirSync(this.root, { recursive: true });
     const temporary = `${this.indexPath}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify(index), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    try { writeFileSync(temporary, JSON.stringify(index), { encoding: 'utf8', flag: 'wx', mode: 0o600 }); }
+    catch (error) { try { unlinkSync(temporary); } catch { /* Nothing to clean up if the file was never created. */ } throw error; }
     renameSync(temporary, this.indexPath);
     try { const directory = openSync(this.root, 'r'); try { fsyncSync(directory); } finally { closeSync(directory); } }
     catch { /* Some Windows filesystems do not allow directory fsync. */ }

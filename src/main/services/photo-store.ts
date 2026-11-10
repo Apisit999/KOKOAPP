@@ -377,7 +377,13 @@ export class PhotoStore {
   private writeIndex(index: PhotoIndex) {
     const temporaryPath = this.indexPath + '.' + randomUUID() + '.tmp';
     const descriptor = openSync(temporaryPath, 'wx', 0o600);
-    try { writeFileSync(descriptor, JSON.stringify(index), 'utf8'); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    let written = false;
+    try { writeFileSync(descriptor, JSON.stringify(index), 'utf8'); fsyncSync(descriptor); written = true; }
+    finally {
+      closeSync(descriptor);
+      // A failed write (for example a full disk) must not leave a stray temporary index behind.
+      if (!written) { try { unlinkSync(temporaryPath); } catch { /* Recovery status reports a leftover temporary file. */ } }
+    }
     renameSync(temporaryPath, this.indexPath);
   }
 }

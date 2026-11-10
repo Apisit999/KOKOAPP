@@ -6,6 +6,7 @@ import { CameraError, type CameraDevice, type CameraStatus } from './camera/came
 import { waitForCaptureDelay } from './camera/capture-delay';
 import { Icon } from './icons';
 import { drawComposition } from './templates';
+import { friendlyErrorText } from './error-text';
 import { type GuestTemplate } from './templates';
 import { normalizedRectToPixels } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers } from './template-layers';
@@ -386,7 +387,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     } catch (error) {
       const reason = controller.signal.aborted
         ? (th ? 'ยกเลิกรอบถ่ายแล้ว' : 'Capture session canceled')
-        : (error instanceof Error ? error.message : (th ? 'ถ่ายไม่สำเร็จ' : 'Capture could not be completed'));
+        : (error instanceof Error ? friendlyErrorText(error.message, th) : (th ? 'ถ่ายไม่สำเร็จ' : 'Capture could not be completed'));
       if ((savedPhotoIds.length || savedVideoId) && sessionId) {
         try { await window.koko.completeCaptureSession(sessionId, 'review'); sessionFinished = true; } catch { /* Keep the saved photos accessible even if session bookkeeping fails. */ }
         setReviewCount(savedPhotoIds.length + (savedVideoId ? 1 : 0));
@@ -436,7 +437,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         ? (th ? 'อัปโหลดภาพและวิดีโอทั้งหมดแล้ว' : 'All photos and videos uploaded')
         : (th ? `อัปโหลดแล้ว ${result.uploadedCount}/${result.mediaCount} ไฟล์` : `Uploaded ${result.uploadedCount}/${result.mediaCount} media files`));
     } catch (error) {
-      setCaptureNotice(error instanceof Error ? error.message : (th ? 'อัปโหลดภาพไม่สำเร็จ' : 'Photo upload failed'));
+      setCaptureNotice(error instanceof Error ? friendlyErrorText(error.message, th) : (th ? 'อัปโหลดภาพไม่สำเร็จ' : 'Photo upload failed'));
     } finally { setCloudSyncing(false); }
   }
   async function retakeRound() {
@@ -540,7 +541,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       }).catch(() => undefined);
       setCaptureNotice(th ? 'โหมดทดลองใช้ภาพตัวอย่าง ระบบบันทึกภาพลงคลังแล้ว' : 'Sample session complete. The images were saved to your library.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : (th ? 'โหมดทดลองทำงานไม่สำเร็จ' : 'Sample session could not be completed.');
+      const message = error instanceof Error ? friendlyErrorText(error.message, th) : (th ? 'โหมดทดลองทำงานไม่สำเร็จ' : 'Sample session could not be completed.');
       if (sessionId && savedIds.length && !finished) {
         try { await window.koko.completeCaptureSession(sessionId, 'review'); finished = true; } catch { /* Keep saved sample files available. */ }
         setReviewCount(savedIds.length); setReviewing(true);

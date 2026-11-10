@@ -155,3 +155,13 @@ test('reads JPEG dimensions and rejects malformed or oversized image headers', (
   assert.throws(() => jpegDimensions(Buffer.from('not a JPEG')), /signature/);
   assert.throws(() => jpegDimensions(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 40])), /segment length/);
 });
+
+test('a failed index write leaves no temporary index file behind', async () => {
+  const root = createRoot();
+  const store = new PhotoStore(root);
+  store.configure();
+  // The ENOSPC case itself is covered by the disk-full end-to-end phase; here the write fails because the data cannot be serialized.
+  assert.throws(() => store.writeIndex({ schemaVersion: 1, photos: [{ unserializable: 1n }] }), TypeError);
+  assert.deepEqual(store.inspectRecovery(), []);
+  assert.equal(store.getStatus(true).pendingRecovery, 0);
+});

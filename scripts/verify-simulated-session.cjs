@@ -14,6 +14,17 @@ fs.mkdirSync(storageDir, { recursive: true });
 app.setPath('userData', path.join(output, 'profile'));
 dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [storageDir] });
 const report = { phase, steps: [], rendererErrors: [] };
+// Full-disk simulation (phase disk-full): fail photo-byte writes with ENOSPC after `fullAfter` successful ones.
+let fullAfter = Infinity; let fdWrites = 0; let failMode = 'all';
+if (phase === 'disk-full') {
+  const nodeFs = require('node:fs'); const realWrite = nodeFs.writeFileSync;
+  nodeFs.writeFileSync = function (target, data, ...rest) {
+    if (typeof target === 'number' && fullAfter !== Infinity && data && data.length > 50 && (failMode === 'all' || typeof data !== 'string')) {
+      if (fdWrites++ >= fullAfter) { realWrite.call(this, target, typeof data === 'string' ? data.slice(0, Math.floor(data.length / 2)) : data.subarray(0, Math.floor(data.length / 2)), ...rest); const error = new Error('ENOSPC: no space left on device, write'); error.code = 'ENOSPC'; throw error; }
+    }
+    return realWrite.call(this, target, data, ...rest);
+  };
+}
 let started = false;
 let stage = 'startup';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -353,6 +364,82 @@ app.on('browser-window-created', (_event, win) => {
         step('round-after-kill', { latestStatus: after[0]?.status, sessions: after.length, photos: finalStatus.photoCount, ok });
         report.killOk = ok;
         if (!ok) throw new Error('State after a mid-round kill is not clean');
+      } else if (phase === 'disk-full') {
+        // Simulated full disk: photo-byte writes fail with ENOSPC (after writing half the bytes, like a real full volume) once armed.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const bodyHas = text => `document.body.innerText.includes(${JSON.stringify(text)})`;
+        const readyJs = `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`;
+        const inspect = async () => {
+          const status = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+          const issues = await evaluate(win, `window.koko.inspectPhotoRecovery()`);
+          return { photos: status.photoCount, pending: status.pendingRecovery, issues };
+        };
+        stage = 'disk-full prepare';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button');
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, readyJs, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        const results = {};
+        // 1) Disk already full: the first photo cannot be saved.
+        await clickCount(win, 1);
+        const base = await inspect();
+        fdWrites = 0; failMode = 'all'; fullAfter = 0;
+        stage = 'disk-full first photo';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, bodyHas('storage disk is full'), 'free-space message', 30000);
+        await wait(1500);
+        fullAfter = Infinity;
+        const afterFail = await inspect();
+        const sessionsA = await evaluate(win, `window.koko.listCaptureSessions(5, 0)`);
+        await shot(win, 'disk-full-first');
+        let stuck = !(await evaluate(win, readyJs)) && !(await evaluate(win, hasText('Finish round')));
+        results.first = { base, afterFail, latest: sessionsA[0] && { status: sessionsA[0].status, photos: sessionsA[0].photoIds.length }, stuck };
+        step('disk-full-first', results.first);
+        if (await evaluate(win, hasText('Finish round'))) await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after full-disk failure', 20000);
+        // 2) The disk fills up after two photos of a 4-photo round.
+        await clickCount(win, 4);
+        const base2 = await inspect();
+        fdWrites = 0; failMode = 'bytes'; fullAfter = 1;
+        stage = 'disk-full mid round';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, `${bodyHas('storage disk is full')} || ${hasText('Finish round')}`, 'review or free-space message mid round', 40000);
+        await wait(1500);
+        fullAfter = Infinity;
+        const afterMid = await inspect();
+        const sessionsB = await evaluate(win, `window.koko.listCaptureSessions(5, 0)`);
+        await shot(win, 'disk-full-mid');
+        const midLatest = sessionsB[0];
+        const unreadable = [];
+        for (const id of midLatest?.photoIds ?? []) { try { await evaluate(win, `window.koko.readPhoto(${JSON.stringify(id)}).then(r => r.jpegBytes.length)`); } catch { unreadable.push(id); } }
+        const messageShown = await evaluate(win, bodyHas('storage disk is full'));
+        const screenText = await evaluate(win, `document.body.innerText.replace(/\s+/g, ' ')`);
+        const midUi = { screenTail: screenText.slice(screenText.indexOf('CAPTURE STRIP')), messageShown, finishVisible: await evaluate(win, hasText('Finish round')), retakeVisible: await evaluate(win, hasText('Retake')), ready: await evaluate(win, readyJs) };
+        results.mid = { base2, afterMid, latest: midLatest && { status: midLatest.status, photos: midLatest.photoIds.length }, unreadable, ui: midUi };
+        step('disk-full-mid', results.mid);
+        if (midUi.finishVisible) await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after mid-round failure', 20000);
+        // 3) Space is freed: a normal round works again.
+        await clickCount(win, 1);
+        const base3 = await inspect();
+        stage = 'disk-full recovered round';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Finish round'), 'review after freeing space', 30000);
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after recovered round', 20000);
+        const end = await inspect();
+        const latest = (await evaluate(win, `window.koko.listCaptureSessions(5, 0)`))[0];
+        results.recovered = { base3, end, status: latest?.status };
+        step('disk-full-recovered', results.recovered);
+        const badKinds = list => list.filter(i => ['invalid-index', 'missing-photo', 'storage-unavailable', 'incomplete-write'].includes(i.kind));
+        const ok = afterFail.photos === base.photos && afterFail.pending === 0 && !badKinds(afterFail.issues).length && !stuck
+          && afterMid.pending === 0 && !badKinds(afterMid.issues).length && unreadable.length === 0 && (midLatest?.photoIds.length ?? 0) === 1 && afterMid.photos === base2.photos + 1 && midUi.messageShown
+          && end.photos === base3.photos + 1 && end.pending === 0 && !badKinds(end.issues).length && latest?.status === 'confirmed';
+        report.diskFullOk = ok;
+        if (!ok) throw new Error('Full-disk handling is not clean: ' + JSON.stringify(results));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -430,5 +517,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
