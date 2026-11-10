@@ -24,3 +24,10 @@ test('merges templates by ID while keeping other saved templates', () => {
   const updated = { ...template, name: 'Updated' };
   assert.deepEqual(mergeTemplateArchive([{ ...template, id: 'keep' }, template], [updated]), [{ ...template, id: 'keep' }, updated]);
 });
+
+test('keeps a video-clip template as video and treats other values as photo', () => {
+  const [video] = parseTemplateArchive(exportTemplateArchive([{ ...template, mediaMode: 'video' }]));
+  assert.equal(video.mediaMode, 'video');
+  const [other] = parseTemplateArchive(pack([{ ...template, mediaMode: 'bogus' }]));
+  assert.equal(other.mediaMode, undefined);
+});

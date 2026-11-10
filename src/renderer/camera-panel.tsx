@@ -30,7 +30,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   const [cameraState, setCameraState] = useState<CameraStatus>('searching');
   const [countdown, setCountdown] = useState(3);
   const [photoCount, setPhotoCount] = useState<number>(() => guestMode ? guestTemplate?.count ?? 1 : 1);
-  const [captureMode, setCaptureMode] = useState<'photo' | 'video'>('photo');
+  const [captureMode, setCaptureMode] = useState<'photo' | 'video'>(() => guestMode && guestTemplate?.mediaMode === 'video' ? 'video' : 'photo');
   const previewVideoAspect = guestMode && captureMode === 'video' && guestTemplate?.videoAspect
     ? guestTemplate.videoAspect : cameraAspect && Number.isFinite(cameraAspect) ? cameraAspect : 16 / 9;
   const [videoDuration, setVideoDuration] = useState(10);
@@ -61,7 +61,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   const recorderRef = useRef<MediaRecorder | null>(null);
   const guestDisplayPayloadRef = useRef<GuestDisplayPayload>({ language: th ? 'th' : 'en', eventName: '', status: 'disconnected', mediaMode: 'photo', countdown: null, resultCount: 0, previewDataUrl: '', qrDataUrl: '', message: '' });
   useEffect(() => onStatus?.(cameraState), [cameraState, onStatus]);
-  useEffect(() => { if (guestMode) setPhotoCount(guestTemplate?.count ?? 1); }, [guestMode, guestTemplate]);
+  useEffect(() => { if (guestMode) { setPhotoCount(guestTemplate?.count ?? 1); setCaptureMode(guestTemplate?.mediaMode === 'video' ? 'video' : 'photo'); } }, [guestMode, guestTemplate]);
   // Guests should never have to find a "start camera" button: open the preview as soon as a camera is found.
   useEffect(() => { if (guestMode && cameraState === 'detected' && !stream) void connect(selectedIdRef.current || undefined); }, [guestMode, cameraState, stream]);
   useEffect(() => {

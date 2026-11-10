@@ -252,6 +252,49 @@ app.on('browser-window-created', (_event, win) => {
         const ok = after.length === before.length + 1 && session.status === 'confirmed' && ids.length === 1 && clip && clip.magic === '1a45dfa3' && clip.bytes > 5000 && clip.durationMs >= 4000 && clip.durationMs <= 8000;
         report.videoOk = Boolean(ok);
         if (!ok) throw new Error('Video round failed: ' + JSON.stringify(entry));
+      } else if (phase === 'guest-video') {
+        // Guest mode with a video-clip template: the guest just taps the shutter, gets a clip to review, and the stored file is a valid WebM.
+        stage = 'guest video setup';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        const tpl = { id: 'qa-video', name: 'QA video', count: 1, mediaMode: 'video', title: 'QA', footer: 'KOKO STUDIO', background: '#171714', frame: '#d6b36a', showDate: true, logo: '', overlay: '', videoOverlay: '', textLayers: [], videoTextLayers: [], imageLayers: [], videoImageLayers: [] };
+        await evaluate(win, `(() => { localStorage.setItem('koko.saved-templates.v1', JSON.stringify([${JSON.stringify(tpl)}])); localStorage.setItem('koko.guest-template.v1', 'qa-video'); })()`);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+          await evaluate(win, `document.querySelector('.brand-button').click()`);
+          await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Start Guest mode')`, 'dashboard', 8000);
+          await clickButton(win, 'button', 'Start Guest mode');
+          await clickButton(win, 'button', 'Stay in Photobooth');
+        }
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+        const results = [];
+        for (const [w, h] of [[1280, 720], [800, 1280]]) {
+          stage = `guest video ${w}x${h}`;
+          win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
+          await wait(900);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready', 20000);
+          const sessionsBefore = (await evaluate(win, `window.koko.listCaptureSessions(200, 0)`)).length;
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'review', 60000);
+          await wait(1000);
+          const review = await evaluate(win, `({ innerHeight, clipShown: Boolean(document.querySelector('.guest-capture .guest-composition video')), overflowX: document.documentElement.scrollWidth > innerWidth, buttons: Array.from(document.querySelectorAll('.guest-capture .review-actions button')).map(b => Math.round(b.getBoundingClientRect().bottom)) })`);
+          await shot(win, `guest-video-${w}x${h}-review`);
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready again', 20000);
+          await wait(500);
+          const sessions = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+          const ids = sessions[0]?.videoIds ?? [];
+          let clip = null;
+          if (ids.length) clip = await evaluate(win, `(async () => { const r = await window.koko.readVideo(${JSON.stringify(ids[0])}); const b = r.webmBytes; return { bytes: b.length, magic: Array.from(b.slice(0, 4)).map(x => x.toString(16)).join(''), durationMs: r.video.durationMs }; })()`);
+          const stale = await evaluate(win, `document.querySelectorAll('.guest-capture .guest-round-photo, .guest-capture .guest-composition').length`);
+          const entry = { size: `${w}x${h}`, review, sessionsAdded: sessions.length - sessionsBefore, status: sessions[0]?.status, videos: ids.length, clip, stale, ok: review.clipShown && !review.overflowX && review.buttons.every(b => b <= h) && sessions.length - sessionsBefore === 1 && sessions[0]?.status === 'confirmed' && ids.length === 1 && clip && clip.magic === '1a45dfa3' && clip.bytes > 5000 && clip.durationMs >= 8000 && clip.durationMs <= 14000 && stale === 0 };
+          results.push(entry); step(`guest-video-${w}x${h}`, entry);
+        }
+        win.webContents.disableDeviceEmulation();
+        await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
+        report.allOk = results.every(r => r.ok);
+        if (!report.allOk) throw new Error('Guest video round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -329,5 +372,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));

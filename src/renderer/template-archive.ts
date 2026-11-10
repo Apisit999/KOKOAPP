@@ -5,7 +5,7 @@ import { MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-
 export type PortableTemplate = {
   id: string; name: string; count: 1 | 2 | 4; title: string; footer: string;
   background: string; frame: string; showDate: boolean; logo: string; overlay: string;
-  videoOverlay: string; slots?: PhotoSlot[]; videoFrame?: PhotoSlot; videoAspect?: number;
+  videoOverlay: string; slots?: PhotoSlot[]; videoFrame?: PhotoSlot; videoAspect?: number; mediaMode?: 'photo' | 'video';
   textLayers?: CaptureTextLayer[]; videoTextLayers?: CaptureTextLayer[];
   imageLayers?: CaptureImageLayer[]; videoImageLayers?: CaptureImageLayer[];
 };
@@ -64,7 +64,7 @@ function validateTemplate(value: unknown): PortableTemplate {
   if (photoSlots && photoSlots.length !== item.count) throw new Error('Photo slot count must match the template photo count.');
   return { id: item.id as string, name: item.name as string, count: item.count as 1 | 2 | 4, title: item.title as string, footer: item.footer as string,
     background: item.background as string, frame: item.frame as string, showDate: item.showDate, logo: item.logo as string, overlay: item.overlay as string, videoOverlay: item.videoOverlay as string,
-    slots: photoSlots, videoFrame: item.videoFrame as PhotoSlot | undefined, videoAspect: item.videoAspect as number | undefined,
+    slots: photoSlots, videoFrame: item.videoFrame as PhotoSlot | undefined, videoAspect: item.videoAspect as number | undefined, mediaMode: item.mediaMode === 'video' ? 'video' : undefined,
     textLayers: layers('textLayers', 6, validTextLayer), videoTextLayers: layers('videoTextLayers', 6, validTextLayer),
     imageLayers: layers('imageLayers', MAX_STICKER_LAYERS, validImageLayer), videoImageLayers: layers('videoImageLayers', MAX_STICKER_LAYERS, validImageLayer) };
 }
