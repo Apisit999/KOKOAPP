@@ -58,10 +58,10 @@ export function validateCaptureTemplate(value: unknown): CaptureTemplateSnapshot
     || (item.videoFrame !== undefined && !validPhotoSlot(item.videoFrame))
     || (item.imageLayers !== undefined && (!Array.isArray(item.imageLayers) || item.imageLayers.length > 4 || !item.imageLayers.every(validImageLayer)))
     || (item.videoImageLayers !== undefined && (!Array.isArray(item.videoImageLayers) || item.videoImageLayers.length > 4 || !item.videoImageLayers.every(validImageLayer)))
-    || (item.overlay !== undefined && (typeof item.overlay !== 'string' || item.overlay.length > 700_000
+    || (item.overlay !== undefined && item.overlay !== '' && (typeof item.overlay !== 'string' || item.overlay.length > 700_000
       || !/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(item.overlay)))) throw new Error('Invalid capture template');
   return { id: item.id, name: item.name.trim(), count: item.count as 1 | 2 | 4, title: item.title, footer: item.footer,
-    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.overlay === 'string' ? { overlay: item.overlay } : {}),
+    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.overlay === 'string' && item.overlay ? { overlay: item.overlay } : {}),
     ...(Array.isArray(item.slots) ? { slots: item.slots as Array<{ x: number; y: number; width: number; height: number }> } : {}),
     ...(Array.isArray(item.textLayers) ? { textLayers: item.textLayers as CaptureTemplateSnapshot['textLayers'] } : {}),
     ...(Array.isArray(item.videoTextLayers) ? { videoTextLayers: item.videoTextLayers as CaptureTemplateSnapshot['videoTextLayers'] } : {}),

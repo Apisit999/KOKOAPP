@@ -113,3 +113,9 @@ test('retains local session history beyond the former 2,000-round limit', t => {
   assert.equal(persisted.sessions.at(-1).id, oldestSessionId);
   assert.notEqual(created.id, oldestSessionId);
 });
+
+test('accepts a template with no frame image (empty overlay) and drops the empty value', () => {
+  const noFrame = validateCaptureTemplate({ ...template, overlay: '' });
+  assert.equal(noFrame.overlay, undefined);
+  assert.throws(() => validateCaptureTemplate({ ...template, overlay: 'not-a-png' }), /Invalid capture template/);
+});

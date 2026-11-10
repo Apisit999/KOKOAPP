@@ -270,6 +270,11 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
   .guest-camera-panel .strip-heading { display: none }
 }
 
+/* Multi-photo review: the composition already shows every photo, so keep the small thumbnails compact and pin Retake/Finish to the bottom edge so the guest never has to scroll to find them. */
+.guest-camera-panel.guest-reviewing:has(.guest-composition) .guest-round-grid { grid-template-columns: repeat(auto-fit, minmax(80px, 120px)); gap: 8px }
+.guest-camera-panel.guest-reviewing .review-feedback { position: sticky; bottom: 0; z-index: 3; background: var(--panel); box-shadow: 0 -10px 18px rgba(0,0,0,.55) }
+.guest-composition img { max-height: 34vh }
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }

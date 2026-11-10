@@ -173,6 +173,48 @@ app.on('browser-window-created', (_event, win) => {
         win.webContents.disableDeviceEmulation();
         report.allFit = results.every(r => r.readyFits && r.reviewFits && r.nextFits && !r.ready.overflowX);
         if (!report.allFit) throw new Error('Guest mode does not fit every tested size: ' + JSON.stringify(results.filter(r => !(r.readyFits && r.reviewFits && r.nextFits && !r.ready.overflowX)).map(r => r.size)));
+      } else if (phase === 'guest-multi') {
+        // Guest mode with multi-photo templates (4 and 2 photos): the round must take every photo (plus the saved composition image), show the composition, fit the screen and leave the next guest clean.
+        stage = 'guest multi setup';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        const mk = (id, count) => ({ id, name: 'QA ' + count, count, title: 'QA title', footer: 'KOKO STUDIO', background: '#171714', frame: '#d6b36a', showDate: true, logo: '', overlay: '', videoOverlay: '', textLayers: [], videoTextLayers: [], imageLayers: [], videoImageLayers: [] });
+        const results = [];
+        for (const count of [4, 2]) {
+          stage = `guest multi ${count}`;
+          await evaluate(win, `(() => { localStorage.setItem('koko.saved-templates.v1', JSON.stringify([${JSON.stringify(mk('qa-' + count, count))}])); localStorage.setItem('koko.guest-template.v1', 'qa-${count}'); })()`);
+          await win.loadFile(html, { query: { camera: 'simulated' } });
+          await wait(1000);
+          if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+            await evaluate(win, `document.querySelector('.brand-button').click()`);
+            await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Start Guest mode')`, 'dashboard', 8000);
+            await clickButton(win, 'button', 'Start Guest mode');
+            await clickButton(win, 'button', 'Stay in Photobooth');
+          }
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+          await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+          for (const [w, h] of [[1280, 720], [800, 1280]]) {
+            win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
+            await wait(900);
+            await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready', 20000);
+            const before = (await evaluate(win, `window.koko.getPhotoStorageStatus()`)).photoCount;
+            await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+            await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'review', 90000);
+            await wait(1500);
+            const review = await evaluate(win, `({ innerHeight, thumbs: document.querySelectorAll('.guest-capture .guest-round-photo').length, composition: Boolean(document.querySelector('.guest-capture .guest-composition img')), overflowX: document.documentElement.scrollWidth > innerWidth, buttons: Array.from(document.querySelectorAll('.guest-capture .review-actions button')).map(b => Math.round(b.getBoundingClientRect().bottom)) })`);
+            await shot(win, `guest-multi-${count}-${w}x${h}-review`);
+            await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+            await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'ready again', 20000);
+            await wait(500);
+            const after = (await evaluate(win, `window.koko.getPhotoStorageStatus()`)).photoCount;
+            const stale = await evaluate(win, `document.querySelectorAll('.guest-capture .guest-round-photo').length`);
+            const entry = { count, size: `${w}x${h}`, review, photosAdded: after - before, stale, ok: review.thumbs === count && review.composition && !review.overflowX && review.buttons.every(b => b <= h) && after - before === count + 1 && stale === 0 };
+            results.push(entry); step(`guest-multi-${count}-${w}x${h}`, entry);
+          }
+          win.webContents.disableDeviceEmulation();
+        }
+        await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
+        report.allOk = results.every(r => r.ok);
+        if (!report.allOk) throw new Error('Guest multi-photo round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -250,5 +292,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, phase === "rounds" ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
