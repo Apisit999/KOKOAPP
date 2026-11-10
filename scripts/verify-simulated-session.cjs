@@ -215,6 +215,43 @@ app.on('browser-window-created', (_event, win) => {
         await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
         report.allOk = results.every(r => r.ok);
         if (!report.allOk) throw new Error('Guest multi-photo round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
+      } else if (phase === 'video') {
+        // Operator-side video clip with the simulated camera: record a 5s clip, review it, finish the round and check the stored WebM.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        stage = 'video prepare';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button');
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled)`, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await clickButton(win, '[aria-label="Choose photo or video"] button', 'Video');
+        await waitFor(win, `Boolean(document.querySelector('[aria-label="Choose video length"]'))`, 'video options', 5000);
+        await clickButton(win, '[aria-label="Choose video length"] button', '5s');
+        const mic = await evaluate(win, `(() => { const c = document.querySelector('.audio-toggle input'); if (c && c.checked) c.click(); return c ? c.checked : null; })()`);
+        step('video-options', { micOff: mic === false });
+        const before = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        stage = 'video record';
+        const started = Date.now();
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Finish round'), 'video review', 40000);
+        const elapsed = Date.now() - started;
+        await shot(win, 'video-review');
+        const reviewInfo = await evaluate(win, `({ video: Boolean(document.querySelector('video[controls], .review-video, .capture-review video')), text: document.body.innerText.slice(0, 300) })`);
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`, 'ready after finish', 20000);
+        stage = 'video verify';
+        const after = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        const session = after[0];
+        const ids = session?.videoIds ?? [];
+        let clip = null;
+        if (ids.length) clip = await evaluate(win, `(async () => { const r = await window.koko.readVideo(${JSON.stringify(ids[0])}); const b = r.webmBytes; return { bytes: b.length, magic: Array.from(b.slice(0, 4)).map(x => x.toString(16)).join(''), durationMs: r.video.durationMs, width: r.video.width, height: r.video.height, mime: r.video.mimeType }; })()`);
+        const entry = { elapsedMs: elapsed, sessionsAdded: after.length - before.length, status: session?.status, videoIds: ids.length, photoIds: (session?.photoIds ?? []).length, clip, reviewInfo };
+        step('video-clip', entry);
+        const ok = after.length === before.length + 1 && session.status === 'confirmed' && ids.length === 1 && clip && clip.magic === '1a45dfa3' && clip.bytes > 5000 && clip.durationMs >= 4000 && clip.durationMs <= 8000;
+        report.videoOk = Boolean(ok);
+        if (!ok) throw new Error('Video round failed: ' + JSON.stringify(entry));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -292,5 +329,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
