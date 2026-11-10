@@ -95,7 +95,7 @@ app.on('browser-window-created', (_event, win) => {
             const birthday = chips.find(button => /Birthday/.test(button.textContent));
             birthday?.click();
             await new Promise(resolve => setTimeout(resolve, 200));
-            const title = Array.from(document.querySelectorAll('.template-field')).find(field => /^Title/.test(field.textContent))?.querySelector('input')?.value;
+            const title = Array.from(document.querySelectorAll('.template-field')).find(field => /^Title(?! and footer font)/.test(field.textContent))?.querySelector('input')?.value;
             const pressed = Array.from(document.querySelectorAll('.template-options button')).filter(button => button.getAttribute('aria-pressed') === 'true').map(button => button.textContent.trim());
             return { chipCount: chips.length, title, pressed };
           })()`);

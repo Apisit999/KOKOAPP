@@ -2,12 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { CaptureImageLayer, CaptureTextLayer, PhotoRecord, PrintJobRecord, PrintOptionsSnapshot, PrintPrinter } from '../shared/contract';
 import { defaultPhotoSlots, isValidPhotoSlot, movePhotoSlot, normalizedRectToPixels, resizePhotoSlot, type PhotoSlot } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers, MAX_STICKER_BYTES, MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-layers';
-import { exportTemplateArchive, mergeTemplateArchive, parseTemplateArchive } from './template-archive';
+import { exportTemplateArchive, mergeTemplateArchive, parseTemplateArchiveWithFonts, type ArchiveFont } from './template-archive';
+import { canvasHeightFor, detectOpenings, posterize, stretchNeeded, SUPPORTED_OPENING_COUNTS } from './frame-import';
+import { addFontFromBytes, base64ToBytes, bytesToBase64, ensureFonts, fontStack, importFontFiles, refreshFonts, removeFont, useFonts } from './fonts';
 import { TEMPLATE_PRESETS, applyTemplatePreset } from './template-presets';
 
 type Template = {
   id: string;
   name: string;
+  fontId?: string;
   count: 1 | 2 | 4;
   title: string;
   footer: string;
@@ -51,7 +54,7 @@ function loadTemplates(): Template[] {
       && typeof item.footer === 'string' && typeof item.background === 'string'
       && typeof item.frame === 'string' && typeof item.showDate === 'boolean'
       && typeof item.logo === 'string'))
-      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
+      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, fontId: typeof item.fontId === 'string' && /^[0-9a-f]{32}$/.test(item.fontId) ? item.fontId : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
   } catch { return []; }
 }
 
@@ -65,6 +68,7 @@ export function loadGuestTemplate(): GuestTemplate | null {
 }
 
 export async function drawComposition(canvas: HTMLCanvasElement, photos: PhotoRecord[], template: Template, language: boolean) {
+  await ensureFonts([template.fontId, ...(template.textLayers ?? []).map(layer => layer.fontId)]);
   const width = 1200;
   const height = template.count === 1 ? 1500 : template.count === 2 ? 1800 : 1600;
   canvas.width = width;
@@ -112,9 +116,9 @@ export async function drawComposition(canvas: HTMLCanvasElement, photos: PhotoRe
       logo.close();
     } catch { /* A removed or invalid logo does not prevent composing the photos. */ }
   }
-  context.font = '500 52px Georgia, serif';
+  context.font = `500 52px ${fontStack(template.fontId, 'Georgia, serif')}`;
   if (template.title) context.fillText(template.title.slice(0, 60), width / 2, template.logo ? 155 : 112, width - 120);
-  context.font = '600 24px sans-serif';
+  context.font = `600 24px ${fontStack(template.fontId, 'sans-serif')}`;
   if (template.footer) context.fillText(template.footer.slice(0, 80), width / 2, height - 105, width - 120);
   if (template.showDate) {
     context.font = '20px sans-serif';
@@ -128,7 +132,7 @@ export async function drawComposition(canvas: HTMLCanvasElement, photos: PhotoRe
   const imageLayers = await loadImageLayers(template.imageLayers);
   try { drawImageLayers(context, imageLayers, width, height); }
   finally { imageLayers.forEach(layer => layer.bitmap.close()); }
-  drawTextLayers(context, template.textLayers, width, height);
+  drawTextLayers(context, template.textLayers, width, height, fontStack);
 }
 
 export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onUseTemplate }: { photos: PhotoRecord[]; th: boolean; onMessage: (message: string) => void; printEnabled?: boolean; onUseTemplate?: (template: GuestTemplate | null) => void }) {
@@ -259,27 +263,39 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     try { localStorage.setItem(TEMPLATE_KEY, serialized); setSaved(next); return true; }
     catch { onMessage(th ? 'บันทึกเทมเพลตไม่สำเร็จ พื้นที่จัดเก็บในเครื่องอาจเต็ม' : 'Could not save template. Local app storage may be full.'); return false; }
   }
-  function exportTemplates() {
+  async function exportTemplates() {
     try {
-      const blob = new Blob([exportTemplateArchive(saved)], { type: 'application/json' });
+      const usedIds = new Set<string>();
+      for (const item of saved) for (const id of [item.fontId, ...(item.textLayers ?? []).map(layer => layer.fontId), ...(item.videoTextLayers ?? []).map(layer => layer.fontId)]) if (id) usedIds.add(id);
+      const archiveFonts: ArchiveFont[] = [];
+      for (const id of usedIds) {
+        try { const { record, bytes } = await window.koko.readFont(id); archiveFonts.push({ id, name: record.name, data: bytesToBase64(bytes) }); } catch { /* A template keeps working without its font; the font is simply not packed. */ }
+      }
+      const blob = new Blob([exportTemplateArchive(saved, archiveFonts)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url; anchor.download = 'koko-templates.json'; anchor.click();
       URL.revokeObjectURL(url);
-      onMessage(th ? 'ส่งออกเทมเพลตแล้ว' : 'Templates exported.');
+      onMessage(th ? `ส่งออกเทมเพลตแล้ว${archiveFonts.length ? ` (รวมฟอนต์ ${archiveFonts.length} ไฟล์)` : ''}` : `Templates exported${archiveFonts.length ? ` with ${archiveFonts.length} font${archiveFonts.length === 1 ? '' : 's'}` : ''}.`);
     } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not export templates.'); }
   }
   async function importTemplates(file?: File) {
     if (!file) return;
-    if (file.size > 4_000_000) { onMessage(th ? 'ไฟล์เทมเพลตมีขนาดเกิน 4 MB' : 'Template archive exceeds 4 MB.'); return; }
+    if (file.size > 16_000_000) { onMessage(th ? 'ไฟล์เทมเพลตมีขนาดเกิน 16 MB' : 'Template archive exceeds 16 MB.'); return; }
     try {
-      const imported = parseTemplateArchive(await file.text());
+      const { templates: imported, fonts: packedFonts } = parseTemplateArchiveWithFonts(await file.text());
+      let fontsAdded = 0;
+      for (const packed of packedFonts) {
+        const record = await addFontFromBytes(`${packed.name}.ttf`, base64ToBytes(packed.data));
+        if (record && record.id === packed.id) fontsAdded++;
+      }
       const next = mergeTemplateArchive(saved, imported);
       if (next.length > 100) { onMessage(th ? 'มีเทมเพลตเกิน 100 รายการ กรุณาลบรายการที่ไม่ใช้ก่อน' : 'You can save up to 100 templates. Remove unused templates first.'); return; }
       if (persist(next)) {
         const active = next.find(item => item.id === activeTemplateId);
         if (active) onUseTemplate?.(active);
-        onMessage(th ? `นำเข้าเทมเพลต ${imported.length} รายการแล้ว` : `Imported ${imported.length} template${imported.length === 1 ? '' : 's'}.`);
+        const fontNote = fontsAdded ? (th ? ` และฟอนต์ ${fontsAdded} ไฟล์` : ` and ${fontsAdded} font${fontsAdded === 1 ? '' : 's'}`) : '';
+        onMessage(th ? `นำเข้าเทมเพลต ${imported.length} รายการ${fontNote}แล้ว` : `Imported ${imported.length} template${imported.length === 1 ? '' : 's'}${fontNote}.`);
       }
     } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not import templates.'); }
   }
@@ -317,6 +333,54 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     reader.onload = () => { if (typeof reader.result === 'string') update('logo', reader.result); };
     reader.onerror = () => onMessage(th ? 'อ่านไฟล์โลโก้ไม่ได้' : 'Could not read the logo file.');
     reader.readAsDataURL(file);
+  }
+  async function uploadDesign(file?: File) {
+    if (!file) return;
+    if (file.type !== 'image/png' || file.size > 8_000_000) {
+      onMessage(th ? 'เลือกไฟล์ PNG ที่เจาะช่องใส่รูปให้โปร่งใส ขนาดไม่เกิน 8 MB' : 'Choose a PNG design with transparent photo windows, up to 8 MB.'); return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const scale = Math.min(1, 400 / Math.max(bitmap.width, bitmap.height));
+        const probe = document.createElement('canvas');
+        probe.width = Math.max(8, Math.round(bitmap.width * scale)); probe.height = Math.max(8, Math.round(bitmap.height * scale));
+        const probeContext = probe.getContext('2d', { willReadFrequently: true });
+        if (!probeContext) throw new Error('canvas unavailable');
+        probeContext.drawImage(bitmap, 0, 0, probe.width, probe.height);
+        const openings = detectOpenings(probeContext.getImageData(0, 0, probe.width, probe.height));
+        if (!openings.length) {
+          onMessage(th ? 'ไม่พบช่องใส่รูปในไฟล์นี้ ให้เจาะช่องรูปเป็นพื้นหลังโปร่งใสในโปรแกรมออกแบบ (Canva: ส่งออกเป็น PNG พื้นหลังโปร่งใส) แล้วลองใหม่' : 'No transparent photo windows were found. Cut the photo areas out as transparent in your design tool (in Canva, export as PNG with a transparent background) and try again.'); return;
+        }
+        if (!(SUPPORTED_OPENING_COUNTS as readonly number[]).includes(openings.length)) {
+          onMessage(th ? `พบช่องใส่รูป ${openings.length} ช่อง แต่เทมเพลตรองรับ 1, 2 หรือ 4 ช่อง` : `Found ${openings.length} photo windows, but templates support 1, 2 or 4.`); return;
+        }
+        const count = openings.length as 1 | 2 | 4;
+        const targetHeight = canvasHeightFor(count);
+        if (stretchNeeded(bitmap.width, bitmap.height, count) > 0.2) {
+          const ratio = count === 1 ? '4:5' : count === 2 ? '2:3' : '3:4';
+          onMessage(th ? `สัดส่วนไฟล์ ${bitmap.width} × ${bitmap.height} ไม่เหมาะกับ ${count} ช่อง ควรเป็นสัดส่วน ${ratio} (เช่น 1200 × ${targetHeight})` : `A ${bitmap.width} × ${bitmap.height} design does not fit a ${count}-photo layout. Use a ${ratio} shape (for example 1200 × ${targetHeight}).`); return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = 1200; canvas.height = targetHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) throw new Error('canvas unavailable');
+        context.drawImage(bitmap, 0, 0, 1200, targetHeight);
+        let blob: Blob | null = null; let reduced = false;
+        for (const levels of [0, 64, 32, 16]) {
+          if (levels) { const pixels = context.getImageData(0, 0, 1200, targetHeight); posterize(pixels, levels); context.putImageData(pixels, 0, 0); reduced = true; }
+          blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+          if (blob && blob.size <= 500 * 1024) break;
+        }
+        if (!blob || blob.size > 500 * 1024) {
+          onMessage(th ? 'ไฟล์ดีไซน์ละเอียดเกินไปจนบีบให้ต่ำกว่า 500 KB ไม่ได้ ลองลดรายละเอียดหรือจำนวนสีของภาพ' : 'This design is too detailed to fit in 500 KB. Simplify the artwork or reduce its colours.'); return;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read')); reader.onerror = () => reject(new Error('read')); reader.readAsDataURL(blob as Blob); });
+        setTemplate(current => ({ ...current, count, overlay: dataUrl, slots: openings }));
+        setSelected([]);
+        onMessage(th ? `นำเข้าดีไซน์แล้ว พบช่องใส่รูป ${count} ช่อง${reduced ? ' (ลดจำนวนสีเพื่อให้ไฟล์เล็กลง)' : ''} ตรวจตำแหน่งช่องรูปด้านล่างได้` : `Design imported: ${count} photo window${count === 1 ? '' : 's'} found${reduced ? ' (colours reduced to fit the size limit)' : ''}. You can fine-tune the openings below.`);
+      } finally { bitmap.close(); }
+    } catch { onMessage(th ? 'ไฟล์ PNG นี้เปิดไม่ได้' : 'This PNG could not be opened.'); }
   }
   async function uploadFrame(file?: File) {
     if (!file) return;
@@ -399,6 +463,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <label className="template-field">{th ? 'ชื่อเทมเพลต' : 'Template name'}<input value={template.name} maxLength={60} onChange={event => update('name', event.target.value)} placeholder={th ? 'เช่น งานวันเกิด' : 'e.g. Birthday'} /></label>
         <div className="template-field"><span>{th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}</span><div className="template-options" role="group" aria-label={th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}>{(['photo', 'video'] as const).map(mode => <button type="button" key={mode} className={(template.mediaMode ?? 'photo') === mode ? 'selected' : ''} aria-pressed={(template.mediaMode ?? 'photo') === mode} onClick={() => setTemplate(current => ({ ...current, mediaMode: mode === 'video' ? 'video' : undefined }))}>{mode === 'photo' ? (th ? 'ภาพถ่าย' : 'Photos') : (th ? 'วิดีโอ' : 'Video clip')}</button>)}</div></div>
         <div className="template-field"><span>{th ? 'เลย์เอาต์' : 'Layout'}</span><div className="template-options">{([1, 2, 4] as const).map(count => <button type="button" key={count} className={template.count === count ? 'selected' : ''} aria-pressed={template.count === count} onClick={() => { if (template.count !== count) setTemplate(current => ({ ...current, count, overlay: '', slots: undefined })); setSelected([]); }}>{count} {th ? 'ภาพ' : count === 1 ? 'photo' : 'photos'}</button>)}</div></div>
+        <FontSelect label={th ? 'ฟอนต์หัวภาพและท้ายภาพ' : 'Title and footer font'} value={template.fontId} th={th} onMessage={onMessage} onChange={fontId => update('fontId', fontId)} />
         <label className="template-field">{th ? 'ข้อความหัวภาพ' : 'Title'}<input value={template.title} maxLength={60} onChange={event => update('title', event.target.value)} /></label>
         <label className="template-field">{th ? 'ข้อความท้ายภาพ' : 'Footer text'}<input value={template.footer} maxLength={80} onChange={event => update('footer', event.target.value)} /></label>
         <label className="template-field">{th ? 'สีพื้นหลัง' : 'Background'}<select value={template.background} onChange={event => update('background', event.target.value)}>{COLORS.map(color => <option value={color.value} key={color.value}>{color.name}</option>)}</select></label>
@@ -407,10 +472,12 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <details className="template-advanced"><summary>{th ? 'โลโก้ กรอบ และข้อความบนภาพถ่าย' : 'Logo, frame and photo layers'}</summary>
         <label className="template-field">{th ? 'โลโก้ (ไม่เกิน 2 MB)' : 'Logo (up to 2 MB)'}<input type="file" accept="image/*" onChange={event => void uploadLogo(event.target.files?.[0])} /></label>
         {template.logo && <button type="button" className="text-link" onClick={() => update('logo', '')}>{th ? 'นำโลโก้ออก' : 'Remove logo'}</button>}
+        <label className="template-field">{th ? 'นำเข้าดีไซน์ของคุณ (PNG ที่เจาะช่องใส่รูปโปร่งใส)' : 'Import your own design (PNG with transparent photo windows)'}<input type="file" accept="image/png" onChange={event => { const input = event.currentTarget; const chosen = input.files?.[0]; input.value = ''; void uploadDesign(chosen); }} /></label>
+        <small className="muted">{th ? 'แอปหาช่องใส่รูปให้เอง รองรับ 1, 2 หรือ 4 ช่อง ใช้ไฟล์จาก Canva หรือ Photoshop ได้ สัดส่วนควรเป็น 4:5 (1 ช่อง), 2:3 (2 ช่อง) หรือ 3:4 (4 ช่อง)' : 'The app finds the photo windows for you (1, 2 or 4). Works with exports from Canva or Photoshop. Use a 4:5 shape for 1 photo, 2:3 for 2, or 3:4 for 4.'}</small>
         <label className="template-field">{th ? 'กรอบ PNG โปร่งใส (ไม่เกิน 500 KB)' : 'Transparent PNG frame (up to 500 KB)'}<input type="file" accept="image/png" onChange={event => void uploadFrame(event.target.files?.[0])} /></label>
         <small className="muted">{th ? 'ทำไฟล์ขนาด 1200 × 1500 (1 ภาพ), 1200 × 1800 (2 ภาพ) หรือ 1200 × 1600 (4 ภาพ) โดยเว้นช่องรูปเป็นพื้นหลังโปร่งใส' : 'Use 1200 × 1500 (1 photo), 1200 × 1800 (2 photos), or 1200 × 1600 (4 photos), with transparent openings for the photos.'}</small>
         {template.overlay && <button type="button" className="text-link" onClick={() => update('overlay', '')}>{th ? 'นำกรอบออก' : 'Remove frame'}</button>}
-        <TextLayersEditor title={th ? 'ข้อความบนภาพถ่าย' : 'Photo text layers'} layers={template.textLayers ?? []} th={th} onChange={layers => update('textLayers', layers)} />
+        <TextLayersEditor onMessage={onMessage} title={th ? 'ข้อความบนภาพถ่าย' : 'Photo text layers'} layers={template.textLayers ?? []} th={th} onChange={layers => update('textLayers', layers)} />
         <ImageLayersEditor title={th ? 'สติกเกอร์ภาพถ่าย' : 'Photo stickers'} layers={template.imageLayers ?? []} th={th} onUpload={file => uploadSticker(file, 'photo-image')} onChange={layers => update('imageLayers', layers)} />
         </details>
         <details className="template-advanced"><summary>{th ? 'วิดีโอ' : 'Video'}</summary>
@@ -438,7 +505,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
           {(template.videoImageLayers ?? []).map((layer, index) => <div key={layer.id} className="sticker-placement video-sticker-placement" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%` }} onPointerDown={event => startSlotDrag(event, index, 'move', 'video-image')}><img src={layer.src} alt="" draggable={false} /><button type="button" aria-label={`${th ? 'ปรับขนาดสติกเกอร์' : 'Resize sticker'} ${index + 1}`} onPointerDown={event => startSlotDrag(event, index, 'resize', 'video-image')} onClick={event => event.stopPropagation()} /></div>)}
           {(template.videoTextLayers ?? []).map(layer => <span key={layer.id} className="template-text-preview-layer video-template-text" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontSize: `${layer.fontSize}cqh`, textAlign: layer.align }}>{layer.text}</span>)}
         </div>
-        <TextLayersEditor title={th ? 'ข้อความบนวิดีโอ' : 'Video text layers'} layers={template.videoTextLayers ?? []} th={th} onChange={layers => update('videoTextLayers', layers)} />
+        <TextLayersEditor onMessage={onMessage} title={th ? 'ข้อความบนวิดีโอ' : 'Video text layers'} layers={template.videoTextLayers ?? []} th={th} onChange={layers => update('videoTextLayers', layers)} />
         <ImageLayersEditor title={th ? 'สติกเกอร์วิดีโอ' : 'Video stickers'} layers={template.videoImageLayers ?? []} th={th} onUpload={file => uploadSticker(file, 'video-image')} onChange={layers => update('videoImageLayers', layers)} />
         </details>
         <div className="template-actions">{printEnabled && <button className="camera-secondary" onClick={() => void printImage()} disabled={!complete || busy}>{th ? 'พิมพ์…' : 'Print…'}</button>}<button className="camera-secondary" onClick={saveTemplate}>{th ? 'บันทึกเทมเพลต' : 'Save template'}</button><button className="primary" onClick={() => void exportImage()} disabled={!complete || busy}>{busy ? (th ? 'กำลังส่งออก…' : 'Exporting…') : (th ? 'ส่งออก PNG' : 'Export PNG')}</button></div>
@@ -454,7 +521,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
             </div>)}
             {template.overlay && <img className="photo-slot-overlay" src={template.overlay} alt="" draggable={false} />}
             {(template.imageLayers ?? []).map((layer, index) => <div key={layer.id} className="sticker-placement" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%` }} onPointerDown={event => startSlotDrag(event, index, 'move', 'photo-image')}><img src={layer.src} alt="" draggable={false} /><button type="button" aria-label={`${th ? 'ปรับขนาดสติกเกอร์' : 'Resize sticker'} ${index + 1}`} onPointerDown={event => startSlotDrag(event, index, 'resize', 'photo-image')} onClick={event => event.stopPropagation()} /></div>)}
-            {(template.textLayers ?? []).map(layer => <span key={layer.id} className="template-text-preview-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontSize: `${layer.fontSize * canvasHeight / 1200}cqw`, textAlign: layer.align }}>{layer.text}</span>)}
+            {(template.textLayers ?? []).map(layer => <span key={layer.id} className="template-text-preview-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontFamily: fontStack(layer.fontId), fontSize: `${layer.fontSize * canvasHeight / 1200}cqw`, textAlign: layer.align }}>{layer.text}</span>)}
           </div>
           <div className="photo-slot-control-list">{photoSlots.map((slot, index) => <fieldset className="photo-slot-controls" key={index}><legend>{th ? `ช่องภาพ ${index + 1}` : `Photo ${index + 1}`}</legend>
             <label>X <input type="range" min="0" max={Math.max(0, 100 - slot.width)} step="0.5" value={slot.x} onChange={event => updateSlot(index, { ...slot, x: Number(event.target.value) })} /><output>{slot.x.toFixed(1)}%</output></label>
@@ -468,6 +535,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         {!photos.length ? <div className="template-no-photos">{th ? 'ยังไม่มีภาพในคลัง ไปที่ Capture Studio เพื่อบันทึกภาพก่อน' : 'Your library is empty. Save photos to the library before making a template.'}</div> : <div className="template-photo-grid">{photos.map(photo => <button type="button" key={photo.id} className={`template-photo ${selected.includes(photo.id) ? 'selected' : ''}`} onClick={() => togglePhoto(photo.id)} aria-pressed={selected.includes(photo.id)} aria-label={`${th ? 'เลือกภาพ' : 'Select photo'} ${new Date(photo.savedAt).toLocaleDateString()}`}><PhotoImage photo={photo} /><span>{selected.includes(photo.id) ? selected.indexOf(photo.id) + 1 : '+'}</span></button>)}</div>}
       </section>
     </div>
+    <FontLibrary th={th} onMessage={onMessage} />
     <section className="saved-template-list"><h2>{th ? 'เทมเพลตที่บันทึกไว้' : 'Saved templates'}</h2><div className="template-archive-actions"><button type="button" className="camera-secondary" onClick={exportTemplates} disabled={!saved.length}>{th ? 'ส่งออกเทมเพลต' : 'Export templates'}</button><button type="button" className="camera-secondary" onClick={() => archiveInputRef.current?.click()}>{th ? 'นำเข้าเทมเพลต' : 'Import templates'}</button><input ref={archiveInputRef} type="file" accept="application/json,.json" hidden onChange={event => { void importTemplates(event.target.files?.[0]); event.currentTarget.value = ''; }} /></div>{saved.length ? saved.map(item => <div className="saved-template-row" key={item.id}><button onClick={() => loadTemplate(item.id)}>{item.name} <small>{item.count} {th ? 'ภาพ' : 'photos'}</small></button><button className="text-link" onClick={() => useForGuest(item)}>{activeTemplateId === item.id ? (th ? 'ใช้แล้ว' : 'In use') : (th ? 'ใช้กับแขก' : 'Use for guests')}</button><button className="saved-template-delete" onClick={() => removeTemplate(item.id)} aria-label={`${th ? 'ลบเทมเพลต' : 'Delete template'} ${item.name}`}>×</button></div>) : <p>{th ? 'ยังไม่มีเทมเพลตที่บันทึกไว้' : 'No saved templates yet.'}</p>}</section>
   </>;
 }
@@ -502,7 +570,7 @@ function ImageLayersEditor({ title, layers, th, onUpload, onChange }: { title: s
   </details>;
 }
 
-function TextLayersEditor({ title, layers, th, onChange }: { title: string; layers: CaptureTextLayer[]; th: boolean; onChange: (layers: CaptureTextLayer[]) => void }) {
+function TextLayersEditor({ title, layers, th, onChange, onMessage }: { title: string; layers: CaptureTextLayer[]; th: boolean; onChange: (layers: CaptureTextLayer[]) => void; onMessage: (message: string) => void }) {
   function updateLayer(index: number, values: Partial<CaptureTextLayer>) {
     onChange(layers.map((layer, itemIndex) => itemIndex === index ? { ...layer, ...values } : layer));
   }
@@ -514,7 +582,8 @@ function TextLayersEditor({ title, layers, th, onChange }: { title: string; laye
     <summary>{title} <span>{layers.length}/6</span></summary>
     {layers.map((layer, index) => <fieldset className="text-layer-fields" key={layer.id}>
       <legend>{th ? `ข้อความ ${index + 1}` : `Text ${index + 1}`}</legend>
-      <label>{th ? 'ข้อความ' : 'Text'}<textarea rows={2} maxLength={100} value={layer.text} onChange={event => updateLayer(index, { text: event.target.value })} /></label>
+      <label>{th ? 'ข้อความ' : 'Text'}<textarea rows={2} maxLength={100} value={layer.text} style={{ fontFamily: fontStack(layer.fontId) }} onChange={event => updateLayer(index, { text: event.target.value })} /></label>
+      <FontSelect label={th ? 'ฟอนต์' : 'Font'} value={layer.fontId} th={th} onMessage={onMessage} onChange={fontId => updateLayer(index, { fontId })} />
       <div className="text-layer-inline">
         <label>{th ? 'สี' : 'Color'}<input type="color" value={layer.color} onChange={event => updateLayer(index, { color: event.target.value })} /></label>
         <label>{th ? 'จัดแนว' : 'Align'}<select value={layer.align} onChange={event => updateLayer(index, { align: event.target.value as CaptureTextLayer['align'] })}><option value="left">{th ? 'ซ้าย' : 'Left'}</option><option value="center">{th ? 'กลาง' : 'Center'}</option><option value="right">{th ? 'ขวา' : 'Right'}</option></select></label>
@@ -527,4 +596,49 @@ function TextLayersEditor({ title, layers, th, onChange }: { title: string; laye
     </fieldset>)}
     <button type="button" className="camera-secondary" onClick={addLayer} disabled={layers.length >= 6}>{th ? 'เพิ่มข้อความ' : 'Add text'}</button>
   </details>;
+}
+
+async function addFontsWithMessage(th: boolean, onMessage: (message: string) => void) {
+  try {
+    const { added, failed } = await importFontFiles();
+    if (added.length) onMessage(th ? `เพิ่มฟอนต์ ${added.length} ไฟล์แล้ว` : `Added ${added.length} font${added.length === 1 ? '' : 's'}.`);
+    if (failed.length) onMessage((th ? 'นำเข้าฟอนต์ไม่สำเร็จ: ' : 'Could not add: ') + failed.join(' · '));
+  } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not add fonts.'); }
+}
+
+function FontSelect({ label, value, th, onChange, onMessage }: { label: string; value: string | undefined; th: boolean; onChange: (fontId: string | undefined) => void; onMessage: (message: string) => void }) {
+  const fonts = useFonts();
+  const missing = Boolean(value) && !fonts.some(font => font.id === value);
+  return <label className="template-field">{label}<select value={value ?? ''} onChange={event => onChange(event.target.value || undefined)}>
+    <option value="">{th ? 'ฟอนต์มาตรฐาน' : 'Default font'}</option>
+    {fonts.map(font => <option key={font.id} value={font.id}>{font.name}</option>)}
+    {missing && <option value={value}>{th ? '(ไม่พบฟอนต์ ใช้ฟอนต์มาตรฐานแทน)' : '(font missing, using the default)'}</option>}
+  </select><button type="button" className="text-link" onClick={() => void addFontsWithMessage(th, onMessage)}>{th ? '+ เพิ่มไฟล์ฟอนต์' : '+ Add a font file'}</button></label>;
+}
+
+function FontLibrary({ th, onMessage }: { th: boolean; onMessage: (message: string) => void }) {
+  const fonts = useFonts();
+  const [busy, setBusy] = useState(false);
+  const [confirmId, setConfirmId] = useState('');
+  useEffect(() => { void refreshFonts(); }, []);
+  async function addFonts() {
+    setBusy(true);
+    try { await addFontsWithMessage(th, onMessage); }
+    finally { setBusy(false); }
+  }
+  async function remove(id: string) {
+    if (confirmId !== id) { setConfirmId(id); return; }
+    setConfirmId('');
+    try { await removeFont(id); onMessage(th ? 'ลบฟอนต์แล้ว เทมเพลตที่ใช้ฟอนต์นี้จะกลับไปใช้ฟอนต์มาตรฐาน' : 'Font removed. Templates that used it fall back to the default font.'); }
+    catch (error) { onMessage(error instanceof Error ? error.message : 'Could not remove the font.'); }
+  }
+  return <section className="font-library">
+    <h2>{th ? 'ฟอนต์ของคุณ' : 'Your fonts'}</h2>
+    <p>{th ? 'เพิ่มไฟล์ฟอนต์ (.ttf .otf .woff .woff2) เพื่อใช้กับข้อความในเทมเพลต ใช้เฉพาะฟอนต์ที่คุณมีสิทธิ์ใช้งาน' : 'Add font files (.ttf .otf .woff .woff2) to use for template text. Only add fonts you are licensed to use.'}</p>
+    <button type="button" className="camera-secondary" onClick={() => void addFonts()} disabled={busy}>{th ? 'เพิ่มไฟล์ฟอนต์' : 'Add font files'}</button>
+    {fonts.length === 0 ? <small>{th ? 'ยังไม่มีฟอนต์ที่เพิ่มเอง' : 'No custom fonts yet.'}</small> : <ul className="font-library-list">{fonts.map(font => <li key={font.id}>
+      <span className="font-sample" style={{ fontFamily: fontStack(font.id) }}>{font.name} · Aa กขค 123</span>
+      <button type="button" className="text-link" onClick={() => void remove(font.id)}>{confirmId === font.id ? (th ? 'กดอีกครั้งเพื่อลบ' : 'Click again to remove') : (th ? 'ลบ' : 'Remove')}</button>
+    </li>)}</ul>}
+  </section>;
 }

@@ -286,6 +286,15 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
   .guest-camera-panel.guest-reviewing .private-album-qr img { width: 130px }
 }
 
+.font-library { display: grid; gap: 10px; margin: 18px 0; padding: 16px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: var(--panel) }
+.template-field > .text-link { justify-self: start; padding: 2px 0; font-size: var(--fs-md) }
+.font-library h2 { margin: 0; font-size: var(--fs-lg) }
+.font-library p { margin: 0; color: var(--secondary); font-size: var(--fs-md); line-height: 1.6 }
+.font-library .camera-secondary { justify-self: start }
+.font-library-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none }
+.font-library-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px }
+.font-sample { overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap }
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }

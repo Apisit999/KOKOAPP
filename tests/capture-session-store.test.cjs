@@ -119,3 +119,14 @@ test('accepts a template with no frame image (empty overlay) and drops the empty
   assert.equal(noFrame.overlay, undefined);
   assert.throws(() => validateCaptureTemplate({ ...template, overlay: 'not-a-png' }), /Invalid capture template/);
 });
+
+test('accepts font ids on a template and its text layers and rejects malformed ones', () => {
+  const id = 'b'.repeat(32);
+  const layer = template.textLayers[0];
+  const ok = validateCaptureTemplate({ ...template, fontId: id, textLayers: [{ ...layer, fontId: id }] });
+  assert.equal(ok.fontId, id);
+  assert.equal(ok.textLayers[0].fontId, id);
+  assert.equal(validateCaptureTemplate(template).fontId, undefined);
+  assert.throws(() => validateCaptureTemplate({ ...template, fontId: '../../x' }), /Invalid capture template/);
+  assert.throws(() => validateCaptureTemplate({ ...template, textLayers: [{ ...layer, fontId: 'zz' }] }), /Invalid capture template/);
+});

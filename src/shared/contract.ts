@@ -18,13 +18,14 @@ export type PhotoStorageStatus = { configured: boolean; directoryName: string | 
 export type PhotoRecoveryIssue = { kind: 'orphan-photo' | 'incomplete-write' | 'index-temp' | 'missing-photo' | 'invalid-index' | 'storage-unavailable'; id: string | null; token?: string };
 export type SavedPhoto = { id: string; width: number; height: number; byteLength: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type PhotoRecord = SavedPhoto & { fileName: string; mimeType: 'image/jpeg' };
+export type FontRecord = { id: string; name: string; fileName: string; format: 'ttf' | 'otf' | 'woff' | 'woff2'; byteLength: number; addedAt: string };
 export type SavedVideo = { id: string; width: number; height: number; byteLength: number; durationMs: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type VideoRecord = SavedVideo & { fileName: string; mimeType: 'video/webm' };
 export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; createdAt: string; updatedAt: string };
 export type PhotoboothEventWithCount = PhotoboothEvent & { photoCount: number };
-export type CaptureTextLayer = { id: string; text: string; x: number; y: number; width: number; fontSize: number; color: string; align: 'left' | 'center' | 'right' };
+export type CaptureTextLayer = { id: string; text: string; x: number; y: number; width: number; fontSize: number; color: string; align: 'left' | 'center' | 'right'; fontId?: string };
 export type CaptureImageLayer = { id: string; src: string; x: number; y: number; width: number; height: number };
-export type CaptureTemplateSnapshot = { id: string; name: string; count: 1 | 2 | 4; title: string; footer: string; background: string; frame: string; showDate: boolean; overlay?: string; slots?: Array<{ x: number; y: number; width: number; height: number }>; textLayers?: CaptureTextLayer[]; videoFrame?: { x: number; y: number; width: number; height: number }; videoTextLayers?: CaptureTextLayer[]; imageLayers?: CaptureImageLayer[]; videoImageLayers?: CaptureImageLayer[] };
+export type CaptureTemplateSnapshot = { id: string; name: string; fontId?: string; count: 1 | 2 | 4; title: string; footer: string; background: string; frame: string; showDate: boolean; overlay?: string; slots?: Array<{ x: number; y: number; width: number; height: number }>; textLayers?: CaptureTextLayer[]; videoFrame?: { x: number; y: number; width: number; height: number }; videoTextLayers?: CaptureTextLayer[]; imageLayers?: CaptureImageLayer[]; videoImageLayers?: CaptureImageLayer[] };
 export type CaptureSessionRecord = { id: string; eventId: string | null; template: CaptureTemplateSnapshot | null; photoIds: string[]; compositionPhotoId?: string; videoIds?: string[]; status: 'capturing' | 'review' | 'confirmed' | 'interrupted' | 'cancelled' | 'retaken'; createdAt: string; updatedAt: string };
 export type Bridge = {
   isMacOS: boolean;
@@ -98,4 +99,9 @@ export type Bridge = {
   updateEvent(id: string, value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
+  listFonts(): Promise<FontRecord[]>;
+  importFonts(): Promise<{ added: FontRecord[]; failed: string[] }>;
+  addFontBytes(fileName: string, bytes: Uint8Array): Promise<FontRecord>;
+  readFont(id: string): Promise<{ record: FontRecord; bytes: Uint8Array }>;
+  deleteFont(id: string): Promise<boolean>;
 };

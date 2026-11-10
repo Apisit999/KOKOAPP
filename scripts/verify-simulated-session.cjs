@@ -12,7 +12,8 @@ const output = path.resolve(outputArg);
 const storageDir = path.join(output, 'photos');
 fs.mkdirSync(storageDir, { recursive: true });
 app.setPath('userData', path.join(output, 'profile'));
-dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [storageDir] });
+let fontDialogFiles = [];
+dialog.showOpenDialog = async (_window, options) => (options && options.properties && options.properties.includes('multiSelections') ? { canceled: false, filePaths: fontDialogFiles } : { canceled: false, filePaths: [storageDir] });
 const report = { phase, steps: [], rendererErrors: [] };
 // Full-disk simulation (phase disk-full): fail photo-byte writes with ENOSPC after `fullAfter` successful ones.
 let fullAfter = Infinity; let fdWrites = 0; let failMode = 'all';
@@ -624,6 +625,144 @@ app.on('browser-window-created', (_event, win) => {
         step('event-summary', { actual, want, rowsShown: Object.keys(rows), overflowX: shown.overflowX, ok });
         report.summaryOk = ok;
         if (!ok) throw new Error('Event summary does not match stored sessions: ' + JSON.stringify({ actual, want }));
+      } else if (phase === 'fonts') {
+        // Custom fonts: import real font files through the Templates page (one bad file mixed in), see them registered with the page,
+        // use them for a template's title/footer and a text layer, keep them after a reload, then remove one. Run after `first` on the same profile.
+        const files = (process.env.KOKO_QA_FONT_FILES || '').split(';').filter(Boolean);
+        if (files.length < 2) throw new Error('Set KOKO_QA_FONT_FILES to two font file paths separated by ;');
+        const bad = path.join(output, 'not-a-font.ttf');
+        fs.writeFileSync(bad, 'this is not a font file at all, only text');
+        fontDialogFiles = [files[0], files[1], bad];
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const setSelect = (labelText, value) => evaluate(win, `(() => { const label = Array.from(document.querySelectorAll('label.template-field')).find(l => l.textContent.startsWith(${JSON.stringify(labelText)})); const sel = label && label.querySelector('select'); if (!sel) return false; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, ${JSON.stringify(value)}); sel.dispatchEvent(new Event('change', { bubbles: true })); return sel.value === ${JSON.stringify(value)}; })()`);
+        stage = 'fonts open page';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        await clickButton(win, '.sidebar nav button', 'Templates');
+        await waitFor(win, `Boolean(document.querySelector('.font-library'))`, 'font library', 10000);
+        const before = await evaluate(win, `window.koko.listFonts()`);
+        stage = 'fonts import';
+        await clickButton(win, '.font-library button', 'Add font files');
+        await waitFor(win, `document.querySelectorAll('.font-library-list li').length === 2`, 'two fonts listed', 20000);
+        await waitFor(win, `document.body.innerText.includes('not-a-font.ttf')`, 'message about the bad file', 10000);
+        const listed = await evaluate(win, `window.koko.listFonts()`);
+        const ids = listed.map(font => font.id);
+        const probe = await evaluate(win, `(() => { const ctx = document.createElement('canvas').getContext('2d'); const sample = 'WWWW mmmm iiii llll 0123 Hello'; ctx.font = '40px sans-serif'; const plain = ctx.measureText(sample).width; return ${JSON.stringify(ids)}.map(id => { ctx.font = '40px "koko-font-' + id + '", sans-serif'; return { id, registered: document.fonts.check('40px "koko-font-' + id + '"'), widthDiffers: Math.abs(ctx.measureText(sample).width - plain) > 1, width: Math.round(ctx.measureText(sample).width * 10) / 10, plain: Math.round(plain * 10) / 10, faces: Array.from(document.fonts).filter(face => face.family.includes(id)).map(face => face.status).join() }; }); })()`);
+        await shot(win, 'fonts-library');
+        const onDisk = fs.readdirSync(path.join(output, 'profile', 'fonts')).filter(name => !name.endsWith('.tmp'));
+        step('fonts-imported', { before: before.length, listed: listed.map(font => ({ name: font.name, format: font.format, bytes: font.byteLength })), probe, onDisk: onDisk.length, badFileListed: listed.some(font => /not-a-font/i.test(font.name)) });
+        const importOk = before.length === 0 && listed.length === 2 && probe.every(item => item.registered && item.widthDiffers) && onDisk.length === 3 && !listed.some(font => /not-a-font/i.test(font.name));
+        // Use the fonts in a template: title/footer font and a text layer font.
+        stage = 'fonts in template';
+        const titleFont = ids[0]; const layerFont = ids[1];
+        const titleSet = await setSelect('Title and footer font', titleFont);
+        await evaluate(win, `(() => { const d = document.querySelector('details.text-layer-editor'); if (d) d.open = true; })()`);
+        await clickButton(win, 'details.text-layer-editor button', 'Add text');
+        await waitFor(win, `Boolean(document.querySelector('details.text-layer-editor fieldset.text-layer-fields select'))`, 'text layer font select', 5000);
+        const layerSet = await evaluate(win, `(() => { const sel = document.querySelector('details.text-layer-editor fieldset.text-layer-fields select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, ${JSON.stringify(layerFont)}); sel.dispatchEvent(new Event('change', { bubbles: true })); return sel.value === ${JSON.stringify(layerFont)}; })()`);
+        await evaluate(win, `(() => { const input = Array.from(document.querySelectorAll('label.template-field')).find(l => l.textContent.startsWith('Template name')).querySelector('input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'QA fonts'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+        await clickButton(win, 'button', 'Save template');
+        await waitFor(win, `Boolean(JSON.parse(localStorage.getItem('koko.saved-templates.v1') || '[]').find(t => t.name === 'QA fonts'))`, 'saved template', 8000);
+        const savedTemplate = await evaluate(win, `JSON.parse(localStorage.getItem('koko.saved-templates.v1')).find(t => t.name === 'QA fonts')`);
+        await shot(win, 'fonts-template-editor');
+        const useOk = titleSet && layerSet && savedTemplate.fontId === titleFont && savedTemplate.textLayers.length === 1 && savedTemplate.textLayers[0].fontId === layerFont;
+        step('fonts-template', { titleSet, layerSet, savedFontId: savedTemplate.fontId === titleFont, layerFontId: savedTemplate.textLayers[0] && savedTemplate.textLayers[0].fontId === layerFont, useOk });
+        // The main process also accepts that template for a capture session (its validator knows fontId).
+        const grant = await evaluate(win, `window.koko.beginCapture(${savedTemplate.count}, ${JSON.stringify(savedTemplate)}, 'photo').then(g => ({ ok: true, id: g.sessionId, auth: g.authorizationId })).catch(e => ({ ok: false, error: String(e.message || e) }))`);
+        if (grant.ok) await evaluate(win, `window.koko.cancelCapture(${JSON.stringify(grant.auth)})`).catch(() => undefined);
+        step('fonts-session', grant);
+        // Survives a reload (fonts are read back from disk and registered again).
+        stage = 'fonts after reload';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1500);
+        const afterReload = await evaluate(win, `(async () => { await new Promise(r => setTimeout(r, 800)); return ${JSON.stringify(ids)}.map(id => document.fonts.check('40px "koko-font-' + id + '"')); })()`);
+        step('fonts-reload', { registered: afterReload });
+        // Remove one (two clicks).
+        stage = 'fonts remove';
+        await clickButton(win, '.sidebar nav button', 'Templates');
+        await waitFor(win, `document.querySelectorAll('.font-library-list li').length === 2`, 'fonts listed after reload', 10000);
+        await evaluate(win, `document.querySelector('.font-library-list li button').click()`);
+        await evaluate(win, `document.querySelector('.font-library-list li button').click()`);
+        await waitFor(win, `document.querySelectorAll('.font-library-list li').length === 1`, 'one font left', 10000);
+        const remaining = await evaluate(win, `window.koko.listFonts()`);
+        const filesLeft = fs.readdirSync(path.join(output, 'profile', 'fonts')).filter(name => !name.endsWith('.tmp') && name !== 'font-index.json');
+        step('fonts-remove', { remaining: remaining.length, filesLeft: filesLeft.length });
+        const ok = importOk && useOk && grant.ok && afterReload.every(Boolean) && remaining.length === 1 && filesLeft.length === 1;
+        report.fontsOk = ok;
+        if (!ok) throw new Error('Custom fonts check failed: ' + JSON.stringify({ importOk, useOk, grant, afterReload, remaining: remaining.length, filesLeft: filesLeft.length }));
+      } else if (phase === 'design') {
+        // A design made elsewhere (a 1500x2250 PNG, 2:3, two transparent windows): import it, check the windows are found, then take a Guest round and
+        // look at the composed picture. Bad files (no windows, 3 windows, wrong shape) must be refused with a clear message. Run after `first`.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const makePng = (w, h, holes, ink) => `(async () => { const c = document.createElement('canvas'); c.width = ${w}; c.height = ${h}; const x = c.getContext('2d'); x.fillStyle = ${JSON.stringify(ink)}; x.fillRect(0, 0, ${w}, ${h}); const g = x.createLinearGradient(0, 0, ${w}, ${h}); g.addColorStop(0, 'rgba(255,255,255,0.10)'); g.addColorStop(1, 'rgba(0,0,0,0.25)'); x.fillStyle = g; x.fillRect(0, 0, ${w}, ${h}); x.fillStyle = '#f2d98d'; x.font = 'bold ' + Math.round(${h} * 0.05) + 'px sans-serif'; x.textAlign = 'center'; x.fillText('MY OWN DESIGN', ${w} / 2, ${h} * 0.07); ${JSON.stringify(holes)}.forEach(([hx, hy, hw, hh]) => x.clearRect(hx, hy, hw, hh)); const blob = await new Promise(r => c.toBlob(r, 'image/png')); return { blob }; })()`;
+        const upload = async (w, h, holes, ink, name) => evaluate(win, `(async () => { const { blob } = await ${makePng(w, h, holes, ink)}; const input = Array.from(document.querySelectorAll('label.template-field')).find(l => l.textContent.startsWith('Import your own design')).querySelector('input'); const dt = new DataTransfer(); dt.items.add(new File([blob], ${JSON.stringify(name)}, { type: 'image/png' })); input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); return blob.size; })()`);
+        stage = 'design open page';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        await clickButton(win, '.sidebar nav button', 'Templates');
+        await waitFor(win, `Array.from(document.querySelectorAll('label.template-field')).some(l => l.textContent.startsWith('Import your own design'))`, 'design import field', 10000);
+        // Refused files first.
+        stage = 'design refused files';
+        await upload(600, 900, [], '#3a2a6a', 'no-windows.png');
+        await waitFor(win, `document.body.innerText.includes('No transparent photo windows')`, 'no-windows message', 10000);
+        await upload(600, 900, [[60, 100, 480, 200], [60, 350, 480, 200], [60, 600, 480, 200]], '#3a2a6a', 'three-windows.png');
+        await waitFor(win, `document.body.innerText.includes('Found 3 photo windows')`, 'three-windows message', 10000);
+        await upload(1920, 1080, [[100, 100, 800, 800], [1020, 100, 800, 800]], '#3a2a6a', 'wrong-shape.png');
+        await waitFor(win, `document.body.innerText.includes('does not fit a 2-photo layout')`, 'wrong-shape message', 10000);
+        step('design-refused', { noWindows: true, threeWindows: true, wrongShape: true });
+        // The good design: 1500x2250, windows at 150,300 1200x800 and 150,1250 1200x800 (percent: x 10, w 80, y 13.3 / 55.6, h 35.6).
+        stage = 'design import';
+        const designBytes = await upload(1500, 2250, [[150, 300, 1200, 800], [150, 1250, 1200, 800]], '#3a2a6a', 'my-design.png');
+        await waitFor(win, `document.body.innerText.includes('Design imported')`, 'import message', 15000);
+        await evaluate(win, `(() => { const input = Array.from(document.querySelectorAll('label.template-field')).find(l => l.textContent.startsWith('Template name')).querySelector('input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'QA design'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+        await clickButton(win, 'button', 'Save template');
+        await waitFor(win, `Boolean(JSON.parse(localStorage.getItem('koko.saved-templates.v1') || '[]').find(t => t.name === 'QA design'))`, 'saved design', 8000);
+        const saved = await evaluate(win, `JSON.parse(localStorage.getItem('koko.saved-templates.v1')).find(t => t.name === 'QA design')`);
+        const dims = await evaluate(win, `(async () => { const b = await createImageBitmap(await (await fetch(${JSON.stringify(saved.overlay)})).blob()); return [b.width, b.height]; })()`);
+        await shot(win, 'design-editor');
+        const near = (a, b, t) => Math.abs(a - b) <= t;
+        const [s0, s1] = saved.slots || [];
+        const importOk = saved.count === 2 && (saved.slots || []).length === 2 && dims[0] === 1200 && dims[1] === 1800 && saved.overlay.length <= 700000
+          && near(s0.x, 10, 1) && near(s0.y, 300 / 2250 * 100, 1) && near(s0.width, 80, 1.5) && near(s0.height, 800 / 2250 * 100, 1.5)
+          && near(s1.y, 1250 / 2250 * 100, 1) && s0.y < s1.y;
+        step('design-import', { count: saved.count, slots: saved.slots, overlayDims: dims, overlayChars: saved.overlay.length, designBytes, importOk });
+        // Guest round with that design: the camera pictures must show through the windows.
+        stage = 'design guest round';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        await evaluate(win, `localStorage.setItem('koko.guest-template.v1', ${JSON.stringify(saved.id)})`);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+          await evaluate(win, `document.querySelector('.brand-button').click()`);
+          await waitFor(win, hasText('Start Guest mode'), 'dashboard', 8000);
+          await clickButton(win, 'button', 'Start Guest mode');
+          await clickButton(win, 'button', 'Stay in Photobooth');
+        }
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'guest ready', 20000);
+        await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture .guest-composition img'))`, 'composition', 60000);
+        await wait(800);
+        const pixels = await evaluate(win, `(async () => { const img = document.querySelector('.guest-capture .guest-composition img'); const b = await createImageBitmap(await (await fetch(img.src)).blob()); const c = document.createElement('canvas'); c.width = b.width; c.height = b.height; const x = c.getContext('2d'); x.drawImage(b, 0, 0); const at = (px, py) => Array.from(x.getImageData(Math.round(b.width * px / 100), Math.round(b.height * py / 100), 1, 1).data).slice(0, 3); return { size: [b.width, b.height], frame: at(4, 50), window1: at(50, 13.3 + 17.8), window2: at(50, 55.6 + 17.8) }; })()`);
+        await shot(win, 'design-guest-review');
+        const far = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60;
+        const frameLooksRight = near(pixels.frame[0], 58, 25) && near(pixels.frame[1], 42, 25) && near(pixels.frame[2], 106, 30);
+        const guestOk = frameLooksRight && far(pixels.window1, pixels.frame) && far(pixels.window2, pixels.frame);
+        step('design-guest', { ...pixels, frameLooksRight, guestOk });
+        await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+        await evaluate(win, `localStorage.removeItem('koko.guest-template.v1')`);
+        report.designOk = importOk && guestOk;
+        if (!report.designOk) throw new Error('Own-design import failed: ' + JSON.stringify({ importOk, guestOk, saved: { count: saved.count, slots: saved.slots }, pixels }));
+      } else if (phase === 'csp') {
+        // The page's Content-Security-Policy must let the renderer read data: and blob: URLs it creates itself (template frames, logos, stickers, compositions).
+        stage = 'csp';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        const probe = await evaluate(win, `(async () => { const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='; const out = {}; try { out.dataFetch = (await (await fetch(png)).blob()).size; } catch (e) { out.dataFetch = 'blocked: ' + e.message; } try { const blob = await (await fetch(png)).blob(); out.blobFetch = (await (await fetch(URL.createObjectURL(blob))).blob()).size; } catch (e) { out.blobFetch = 'blocked: ' + e.message; } try { const img = new Image(); img.src = png; await img.decode(); out.imageTag = [img.naturalWidth, img.naturalHeight]; } catch (e) { out.imageTag = 'failed: ' + e.message; } return out; })()`);
+        step('csp', probe);
+        report.cspOk = typeof probe.dataFetch === 'number' && typeof probe.blobFetch === 'number' && Array.isArray(probe.imageTag);
+        if (!report.cspOk) throw new Error('The renderer cannot read its own data:/blob: URLs: ' + JSON.stringify(probe));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -701,5 +840,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "csp", "design", "fonts", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));

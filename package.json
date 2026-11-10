@@ -39,6 +39,8 @@
     "test:update": "node --test tests/update-checker.test.cjs",
     "verify:simulated-session": "electron scripts/verify-simulated-session.cjs",
     "test:template-presets": "node --test tests/template-presets.test.cjs",
+    "test:frame-import": "node --test tests/frame-import.test.cjs",
+    "test:font-store": "node --test tests/font-store.test.cjs",
     "test:error-text": "node --test tests/error-text.test.cjs",
     "test:event-summary": "node --test tests/event-summary.test.cjs",
     "test:problem-report": "node --test tests/problem-report.test.cjs",

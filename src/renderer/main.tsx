@@ -8,6 +8,7 @@ import { Icon } from './icons';
 import { AccountLinkCard } from './account-link-card';
 import { UpdateBanner } from './update-banner';
 import { TemplatesPage } from './templates';
+import { refreshFonts } from './fonts';
 import { loadGuestTemplate, type GuestTemplate } from './templates';
 import { EventsPage } from './events';
 import { cameraManager, PhotoThumb } from './ui-common';
@@ -18,6 +19,7 @@ import { cameraReadinessText, ReadinessItem, ReadinessChecklist, GuestPreviewPag
 import { CameraFolderWatchSettings, KokoMemorySettings, ReportProblem, GuestExitPinSettings } from './settings-sections';
 
 function App() {
+  useEffect(() => { void refreshFonts(); }, []);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [mode, setMode] = useState<'operator' | 'guest'>('operator');
   const [exitPromptOpen, setExitPromptOpen] = useState(false);

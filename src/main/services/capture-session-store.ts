@@ -25,6 +25,7 @@ function validTextLayer(value: unknown): boolean {
     && (layer.width as number) >= 10 && (layer.x as number) + (layer.width as number) <= 100
     && (layer.fontSize as number) >= 1 && (layer.fontSize as number) <= 12
     && typeof layer.color === 'string' && COLOR.test(layer.color)
+    && (layer.fontId === undefined || (typeof layer.fontId === 'string' && /^[0-9a-f]{32}$/.test(layer.fontId)))
     && ['left', 'center', 'right'].includes(layer.align as string);
 }
 function validImageLayer(value: unknown): boolean {
@@ -52,6 +53,7 @@ export function validateCaptureTemplate(value: unknown): CaptureTemplateSnapshot
     || typeof item.background !== 'string' || !COLOR.test(item.background)
     || typeof item.frame !== 'string' || !COLOR.test(item.frame)
     || typeof item.showDate !== 'boolean'
+    || (item.fontId !== undefined && (typeof item.fontId !== 'string' || !/^[0-9a-f]{32}$/.test(item.fontId)))
     || (item.slots !== undefined && (!Array.isArray(item.slots) || item.slots.length !== item.count || !item.slots.every(validPhotoSlot)))
     || (item.textLayers !== undefined && (!Array.isArray(item.textLayers) || item.textLayers.length > 6 || !item.textLayers.every(validTextLayer)))
     || (item.videoTextLayers !== undefined && (!Array.isArray(item.videoTextLayers) || item.videoTextLayers.length > 6 || !item.videoTextLayers.every(validTextLayer)))
@@ -61,7 +63,7 @@ export function validateCaptureTemplate(value: unknown): CaptureTemplateSnapshot
     || (item.overlay !== undefined && item.overlay !== '' && (typeof item.overlay !== 'string' || item.overlay.length > 700_000
       || !/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(item.overlay)))) throw new Error('Invalid capture template');
   return { id: item.id, name: item.name.trim(), count: item.count as 1 | 2 | 4, title: item.title, footer: item.footer,
-    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.overlay === 'string' && item.overlay ? { overlay: item.overlay } : {}),
+    background: item.background, frame: item.frame, showDate: item.showDate, ...(typeof item.fontId === 'string' ? { fontId: item.fontId } : {}), ...(typeof item.overlay === 'string' && item.overlay ? { overlay: item.overlay } : {}),
     ...(Array.isArray(item.slots) ? { slots: item.slots as Array<{ x: number; y: number; width: number; height: number }> } : {}),
     ...(Array.isArray(item.textLayers) ? { textLayers: item.textLayers as CaptureTemplateSnapshot['textLayers'] } : {}),
     ...(Array.isArray(item.videoTextLayers) ? { videoTextLayers: item.videoTextLayers as CaptureTemplateSnapshot['videoTextLayers'] } : {}),

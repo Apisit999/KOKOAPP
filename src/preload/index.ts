@@ -88,6 +88,11 @@ const bridge: Bridge = {
   createEvent: value => ipcRenderer.invoke('koko:events-create', value),
   updateEvent: (id, value) => ipcRenderer.invoke('koko:events-update', id, value),
   deleteEvent: id => ipcRenderer.invoke('koko:events-delete', id),
-  setActiveEvent: id => ipcRenderer.invoke('koko:events-set-active', id)
+  setActiveEvent: id => ipcRenderer.invoke('koko:events-set-active', id),
+  listFonts: () => ipcRenderer.invoke('koko:fonts-list'),
+  importFonts: () => ipcRenderer.invoke('koko:fonts-import'),
+  addFontBytes: (fileName, bytes) => ipcRenderer.invoke('koko:fonts-add-bytes', fileName, bytes),
+  readFont: id => ipcRenderer.invoke('koko:fonts-read', id),
+  deleteFont: id => ipcRenderer.invoke('koko:fonts-delete', id)
 };
 contextBridge.exposeInMainWorld('koko', bridge);

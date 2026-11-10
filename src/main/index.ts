@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Settings, AppStatus, GuestDisplayPayload } from '../shared/contract';
 import { PhotoStore, validateStorageRoot } from './services/photo-store';
 import { VideoStore } from './services/video-store';
+import { FontStore, MAX_FONT_BYTES } from './services/font-store';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
 import { LicenseRuntime } from './services/license-runtime';
@@ -272,6 +273,8 @@ function getPhotoStore(root: string) {
   if (!store) { store = new PhotoStore(key); photoStores.set(key, store); }
   return store;
 }
+let fontStoreInstance: FontStore | null = null;
+function fonts() { return fontStoreInstance ??= new FontStore(path.join(dataDir(), 'fonts')); }
 function getVideoStore(root: string) {
   const key = path.resolve(root);
   let store = videoStores.get(key);
@@ -787,6 +790,32 @@ app.on('ready', () => {
     if (typeof id !== 'string') throw new Error('Invalid event ID');
     return events().update(id, value);
   });
+  ipcMain.handle('koko:fonts-list', event => { trusted(event); return fonts().list(); });
+  ipcMain.handle('koko:fonts-import', async event => {
+    trusted(event);
+    if (!mainWindow) throw new Error('Application window is unavailable.');
+    const choice = await dialog.showOpenDialog(mainWindow, { title: 'Choose font files', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Fonts', extensions: ['ttf', 'otf', 'woff', 'woff2'] }] });
+    const added: ReturnType<FontStore['add']>[] = []; const failed: string[] = [];
+    if (choice.canceled) return { added, failed };
+    for (const selected of choice.filePaths.slice(0, 20)) {
+      const name = path.basename(selected);
+      try {
+        const metadata = lstatSync(selected);
+        if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('Select a regular font file.');
+        if (metadata.size > MAX_FONT_BYTES) throw new Error('Font file is larger than 3 MB.');
+        added.push(fonts().add(new Uint8Array(readFileSync(selected)), name));
+      } catch (error) { failed.push(`${name}: ${error instanceof Error ? error.message : 'could not be read'}`); }
+    }
+    log('fonts-imported', undefined, { added: added.length, failed: failed.length });
+    return { added, failed };
+  });
+  ipcMain.handle('koko:fonts-add-bytes', (event, fileName: unknown, bytes: unknown) => {
+    trusted(event);
+    if (typeof fileName !== 'string' || fileName.length > 200 || !(bytes instanceof Uint8Array) || bytes.byteLength > MAX_FONT_BYTES) throw new Error('Invalid font data');
+    return fonts().add(bytes, fileName);
+  });
+  ipcMain.handle('koko:fonts-read', (event, id: unknown) => { trusted(event); if (typeof id !== 'string') throw new Error('Invalid font ID'); return fonts().read(id); });
+  ipcMain.handle('koko:fonts-delete', (event, id: unknown) => { trusted(event); if (typeof id !== 'string') throw new Error('Invalid font ID'); return fonts().remove(id); });
   ipcMain.handle('koko:events-set-active', (event, id: unknown) => { trusted(event); return events().setActive(id); });
   ipcMain.handle('koko:events-delete', (event, id: unknown) => {
     trusted(event);

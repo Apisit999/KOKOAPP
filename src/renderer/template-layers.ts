@@ -2,6 +2,7 @@ import type { CaptureImageLayer, CaptureTextLayer } from '../shared/contract';
 import { normalizedRectToPixels } from './template-layout.ts';
 
 const COLOR = /^#[0-9a-f]{6}$/i;
+const FONT_ID = /^[0-9a-f]{32}$/;
 export const MAX_STICKER_BYTES = 100 * 1024;
 export const MAX_STICKER_LAYERS = 4;
 
@@ -52,10 +53,12 @@ export function validTextLayer(value: unknown): value is CaptureTextLayer {
     && (item.width as number) >= 10 && (item.x as number) + (item.width as number) <= 100
     && (item.fontSize as number) >= 1 && (item.fontSize as number) <= 12
     && typeof item.color === 'string' && COLOR.test(item.color)
+    && (item.fontId === undefined || (typeof item.fontId === 'string' && FONT_ID.test(item.fontId)))
     && ['left', 'center', 'right'].includes(item.align as string);
 }
 
-export function drawTextLayers(context: CanvasRenderingContext2D, layers: CaptureTextLayer[] | undefined, width: number, height: number) {
+/** `fontStack` turns a stored font id into a CSS font-family list (the app registers imported fonts under their id). */
+export function drawTextLayers(context: CanvasRenderingContext2D, layers: CaptureTextLayer[] | undefined, width: number, height: number, fontStack: (fontId?: string) => string = () => 'sans-serif') {
   if (!layers?.length) return;
   context.save();
   context.textBaseline = 'top';
@@ -64,7 +67,7 @@ export function drawTextLayers(context: CanvasRenderingContext2D, layers: Captur
     const fontSize = Math.max(8, height * layer.fontSize / 100);
     const x = width * layer.x / 100;
     const maxWidth = width * layer.width / 100;
-    context.font = `600 ${fontSize}px sans-serif`;
+    context.font = `600 ${fontSize}px ${fontStack(layer.fontId)}`;
     context.fillStyle = layer.color;
     context.textAlign = layer.align;
     const anchor = layer.align === 'left' ? x : layer.align === 'center' ? x + maxWidth / 2 : x + maxWidth;

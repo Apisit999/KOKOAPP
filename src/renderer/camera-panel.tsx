@@ -10,6 +10,7 @@ import { friendlyErrorText } from './error-text';
 import { type GuestTemplate } from './templates';
 import { normalizedRectToPixels } from './template-layout';
 import { drawImageLayers, drawTextLayers, loadImageLayers } from './template-layers';
+import { ensureFonts, fontStack } from './fonts';
 import { cameraManager, hasLowPhotoStorage, formatStorageSpace, PhotoThumb } from './ui-common';
 
 export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageReady = false, storageAvailableBytes = null, photos = [], onOpenPhoto, onDeletePhoto, onExportPhoto, onOpenStorage, onOpenGallery, onOpenSettings, onOpenPrint, onOpenGuestDisplay, guestDisplayActive = false, availableGuestDisplays = [], selectedGuestDisplayId = null, onSelectGuestDisplay, storageName = null, activeEventName = null, guestMode = false, guestTemplate = null }: {
@@ -277,6 +278,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         if (guestMode && (guestTemplate?.videoOverlay || guestTemplate?.videoTextLayers?.length || guestTemplate?.videoImageLayers?.length)) {
           if (guestTemplate.videoOverlay) frameBitmap = await createImageBitmap(await (await fetch(guestTemplate.videoOverlay)).blob());
           stickerBitmaps = await loadImageLayers(guestTemplate.videoImageLayers);
+          await ensureFonts((guestTemplate.videoTextLayers ?? []).map(layer => layer.fontId));
           framedCanvas = document.createElement('canvas');
           const cameraSize = stream.getVideoTracks()[0]?.getSettings();
           const sourceWidth = frameBitmap ? frameBitmap.width : video.videoWidth || cameraSize?.width || 16;
@@ -300,7 +302,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
               context.drawImage(frameBitmap, frameRect.x, frameRect.y, frameRect.width, frameRect.height);
             }
             drawImageLayers(context, stickerBitmaps, outputWidth, outputHeight);
-            drawTextLayers(context, guestTemplate?.videoTextLayers, outputWidth, outputHeight);
+            drawTextLayers(context, guestTemplate?.videoTextLayers, outputWidth, outputHeight, fontStack);
             drawFrame = requestAnimationFrame(renderFrame);
           };
           renderFrame();
