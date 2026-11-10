@@ -8,6 +8,7 @@ import type { Settings, AppStatus, GuestDisplayPayload } from '../shared/contrac
 import { PhotoStore, validateStorageRoot } from './services/photo-store';
 import { VideoStore } from './services/video-store';
 import { FontStore, MAX_FONT_BYTES } from './services/font-store';
+import { normalizeSlideshowSettings, pickSlideshowPhotoIds } from '../shared/slideshow';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
 import { LicenseRuntime } from './services/license-runtime';
@@ -72,6 +73,7 @@ if (hasSingleInstanceLock) {
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const guestModeFile = () => path.join(dataDir(), 'guest-mode.json');
+const slideshowFile = () => path.join(dataDir(), 'slideshow.json');
 const photoStorageConfigFile = () => path.join(dataDir(), 'photo-storage.json');
 const cameraFolderConfigFile = () => path.join(dataDir(), 'camera-folder.json');
 const photoStores = new Map<string, PhotoStore>();
@@ -670,6 +672,51 @@ app.on('ready', () => {
     else if (event.sender !== guestDisplayWindow?.webContents || event.senderFrame !== guestDisplayWindow.webContents.mainFrame) throw new Error('Untrusted frame');
     guestDisplayWindow?.close();
     return true;
+  });
+  // Live slideshow: the settings belong to the operator window; the list and the pictures are read only by the guest display window.
+  const slideshowSettings = () => { try { return normalizeSlideshowSettings(JSON.parse(readFileSync(slideshowFile(), 'utf8'))); } catch { return normalizeSlideshowSettings(undefined); } };
+  const guestDisplayOnly = (event: Electron.IpcMainInvokeEvent) => {
+    if (!guestDisplayWindow || guestDisplayWindow.isDestroyed() || event.sender !== guestDisplayWindow.webContents || event.senderFrame !== guestDisplayWindow.webContents.mainFrame) throw new Error('Untrusted frame');
+  };
+  let slideshowCache: { at: number; ids: string[] } = { at: 0, ids: [] };
+  const slideshowIds = (limit: number) => {
+    if (Date.now() - slideshowCache.at < 1500 && slideshowCache.ids.length <= limit) return slideshowCache.ids;
+    const root = configuredPhotoRoot();
+    if (!root) return [];
+    const all: ReturnType<ReturnType<typeof captureSessions>['list']> = [];
+    for (let offset = 0; offset < 20_000; offset += 200) { const page = captureSessions().list(200, offset); all.push(...page); if (page.length < 200) break; }
+    const store = getPhotoStore(root);
+    const ids = pickSlideshowPhotoIds(all, events().active()?.id ?? null, limit * 2).filter(id => { try { store.readPhoto(id); return true; } catch { return false; } }).slice(0, limit);
+    slideshowCache = { at: Date.now(), ids };
+    return ids;
+  };
+  ipcMain.handle('koko:slideshow-settings-get', event => { trusted(event); return slideshowSettings(); });
+  ipcMain.handle('koko:slideshow-settings-save', (event, value: unknown) => {
+    trusted(event);
+    const next = normalizeSlideshowSettings(value);
+    const temporaryFile = `${slideshowFile()}.tmp`;
+    try { mkdirSync(dataDir(), { recursive: true }); writeFileSync(temporaryFile, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 }); renameSync(temporaryFile, slideshowFile()); }
+    catch (error) { try { unlinkSync(temporaryFile); } catch { /* Keep the original error. */ } throw error; }
+    slideshowCache = { at: 0, ids: [] };
+    return next;
+  });
+  ipcMain.handle('koko:slideshow-list', event => {
+    guestDisplayOnly(event);
+    const settings = slideshowSettings();
+    return { settings, ids: settings.enabled ? slideshowIds(settings.limit) : [] };
+  });
+  ipcMain.handle('koko:slideshow-photo', (event, id: unknown) => {
+    guestDisplayOnly(event);
+    const settings = slideshowSettings();
+    if (!settings.enabled || typeof id !== 'string' || !slideshowIds(settings.limit).includes(id)) throw new Error('Photo is not part of the slideshow');
+    const root = configuredPhotoRoot();
+    if (!root) throw new Error('Photo storage is not configured');
+    const image = nativeImage.createFromBuffer(Buffer.from(getPhotoStore(root).readPhoto(id).bytes));
+    if (image.isEmpty()) throw new Error('Photo could not be decoded');
+    const size = image.getSize();
+    const scale = Math.min(1, 1600 / Math.max(size.width, size.height));
+    const shown = scale < 1 ? image.resize({ width: Math.round(size.width * scale), height: Math.round(size.height * scale), quality: 'good' }) : image;
+    return `data:image/jpeg;base64,${shown.toJPEG(85).toString('base64')}`;
   });
   ipcMain.handle('koko:display-open-state', event => { trusted(event); return Boolean(guestDisplayWindow && !guestDisplayWindow.isDestroyed()); });
   ipcMain.handle('koko:display-publish', (event, value: unknown) => {

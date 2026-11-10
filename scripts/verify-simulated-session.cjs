@@ -763,6 +763,84 @@ app.on('browser-window-created', (_event, win) => {
         step('csp', probe);
         report.cspOk = typeof probe.dataFetch === 'number' && typeof probe.blobFetch === 'number' && Array.isArray(probe.imageTag);
         if (!report.cspOk) throw new Error('The renderer cannot read its own data:/blob: URLs: ' + JSON.stringify(probe));
+      } else if (phase === 'slideshow') {
+        // Live slideshow on the guest display. Only one monitor is available here, so the test script adds a pretend second display.
+        // Run after `first` on a profile that is not in Guest mode.
+        const { screen, BrowserWindow } = require('electron');
+        const realDisplays = screen.getAllDisplays.bind(screen);
+        screen.getAllDisplays = () => { const list = realDisplays(); return list.length > 1 ? list : [...list, { ...list[0], id: 99991, bounds: { x: list[0].bounds.x + list[0].bounds.width, y: list[0].bounds.y, width: 1280, height: 720 } }]; };
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const readyJs = `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`;
+        stage = 'slideshow setup';
+        const defaults = await evaluate(win, `window.koko.getSlideshowSettings()`);
+        const operatorBlocked = await evaluate(win, `window.koko.getSlideshowPhotoIds().then(() => 'allowed', error => String(error.message))`);
+        await evaluate(win, `window.koko.saveSlideshowSettings({ enabled: true, secondsPerSlide: 4, limit: 20 })`);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button', 15000);
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, readyJs, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await clickCount(win, 1);
+        const round = async retake => {
+          await evaluate(win, `document.querySelector('.capture-disc').click()`);
+          await waitFor(win, hasText('Finish round'), 'review', 30000);
+          if (retake) { await clickButton(win, 'button', 'Retake'); await wait(600); await waitFor(win, hasText('Finish round'), 'review after retake', 30000); }
+          await clickButton(win, 'button', 'Finish round');
+          await waitFor(win, readyJs, 'ready after finish', 20000);
+        };
+        stage = 'slideshow rounds';
+        await round(false); await round(true); await round(false);
+        const sessions = await evaluate(win, `window.koko.listCaptureSessions(50, 0)`);
+        const activeEventId = (await evaluate(win, `window.koko.listEvents()`)).activeEventId;
+        const confirmed = sessions.filter(item => item.status === 'confirmed' && item.eventId === activeEventId).sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+        const retakenIds = sessions.filter(item => item.status === 'retaken').flatMap(item => item.photoIds);
+        const expectedIds = confirmed.flatMap(item => item.compositionPhotoId ? [item.compositionPhotoId] : item.photoIds);
+        stage = 'slideshow display';
+        await evaluate(win, `window.koko.openGuestDisplay(99991)`);
+        let display = null;
+        for (let i = 0; i < 60 && !display; i++) { display = BrowserWindow.getAllWindows().find(w => w !== win && !w.isDestroyed() && w.webContents.getURL().includes('guestDisplay=1')) || null; if (!display) await wait(250); }
+        if (!display) throw new Error('Guest display window did not open');
+        const onDisplay = js => display.webContents.executeJavaScript(js);
+        await waitFor(win, `true`, 'noop', 100);
+        const listed = await onDisplay(`window.koko.getSlideshowPhotoIds()`);
+        const listOk = JSON.stringify(listed.ids) === JSON.stringify(expectedIds) && listed.ids.length === expectedIds.length && expectedIds.length >= 3 && !listed.ids.some(id => retakenIds.includes(id)) && listed.settings.enabled === true;
+        const strangerPhoto = await onDisplay(`window.koko.readSlideshowPhoto('${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}').then(() => 'allowed', error => String(error.message))`);
+        const retakenPhoto = retakenIds[0] ? await onDisplay(`window.koko.readSlideshowPhoto(${JSON.stringify(retakenIds[0])}).then(() => 'allowed', error => String(error.message))`) : 'none';
+        step('slideshow-list', { listed: listed.ids.length, expected: expectedIds.length, retakenExcluded: !listed.ids.some(id => retakenIds.includes(id)), operatorBlocked, strangerPhoto, retakenPhoto, defaultsOff: defaults.enabled === false, listOk });
+        // After about 20 seconds without activity the slideshow takes over the display.
+        stage = 'slideshow idle start';
+        const waitDisplay = async (js, label, timeout) => { const end = Date.now() + timeout; while (Date.now() < end) { if (await onDisplay(js)) return; await wait(300); } throw new Error('Timed out waiting for ' + label); };
+        await waitDisplay(`Boolean(document.querySelector('.guest-display-slide'))`, 'first slide', 60000);
+        const first = await onDisplay(`({ src: document.querySelector('.guest-display-slide').src.slice(0, 40), srcLen: document.querySelector('.guest-display-slide').src.length, latest: Boolean(document.querySelector('.guest-display-latest')), loaded: document.querySelector('.guest-display-slide').complete && document.querySelector('.guest-display-slide').naturalWidth > 100 })`);
+        const seen = new Set();
+        for (let i = 0; i < 45 && seen.size < 3; i++) { seen.add(await onDisplay(`document.querySelector('.guest-display-slide') ? document.querySelector('.guest-display-slide').src.length + ':' + document.querySelector('.guest-display-slide').src.slice(-24) : ''`)); await wait(1000); }
+        await display.webContents.capturePage().then(image => fs.writeFileSync(path.join(output, 'slideshow-display.png'), image.toPNG()));
+        step('slideshow-playing', { first, distinctSlides: seen.size });
+        // Someone steps up to the booth: the live view must take over right away.
+        stage = 'slideshow yields to the booth';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitDisplay(`!document.querySelector('.guest-display-slide')`, 'slideshow to stop when a round starts', 15000);
+        await waitFor(win, hasText('Finish round'), 'review', 30000);
+        const stoppedDuringReview = await onDisplay(`!document.querySelector('.guest-display-slide')`);
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after finish', 20000);
+        const afterIds = (await onDisplay(`window.koko.getSlideshowPhotoIds()`)).ids;
+        await waitDisplay(`Boolean(document.querySelector('.guest-display-slide'))`, 'slideshow to resume after the round', 60000);
+        const resumed = await onDisplay(`({ latest: Boolean(document.querySelector('.guest-display-latest')) })`);
+        step('slideshow-yield', { stoppedDuringReview, listGrew: afterIds.length === expectedIds.length + 1, newestFirst: afterIds[0] !== expectedIds[0] && afterIds.slice(1).join() === expectedIds.join(), resumed });
+        // Switching it off clears the screen.
+        await evaluate(win, `window.koko.saveSlideshowSettings({ enabled: false, secondsPerSlide: 4, limit: 20 })`);
+        await waitDisplay(`!document.querySelector('.guest-display-slide')`, 'slideshow to stop when switched off', 15000);
+        const offList = await onDisplay(`window.koko.getSlideshowPhotoIds()`);
+        step('slideshow-off', { ids: offList.ids.length });
+        await evaluate(win, `window.koko.closeGuestDisplay()`);
+        const ok = listOk && operatorBlocked.includes('Untrusted') && strangerPhoto.includes('not part of the slideshow') && retakenPhoto.includes('not part of the slideshow') && defaults.enabled === false
+          && first.loaded && first.latest && first.src.startsWith('data:image/jpeg') && seen.size >= 2
+          && stoppedDuringReview && afterIds.length === expectedIds.length + 1 && afterIds[0] !== expectedIds[0] && afterIds.slice(1).join() === expectedIds.join() && offList.ids.length === 0;
+        report.slideshowOk = ok;
+        if (!ok) throw new Error('Slideshow check failed, see steps');
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -840,5 +918,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "csp", "design", "fonts", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "slideshow", "csp", "design", "fonts", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));

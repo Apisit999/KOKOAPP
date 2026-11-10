@@ -295,6 +295,12 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .font-library-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px }
 .font-sample { overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap }
 
+.guest-display-slides { position: fixed; z-index: 5; inset: 0; display: grid; place-items: center; background: #050505 }
+.guest-display-slide { width: 100vw; height: 100vh; object-fit: contain; animation: guest-slide-in .8s ease }
+.guest-display-latest { position: absolute; top: 28px; right: 32px; padding: 10px 20px; border: 1px solid rgba(216,181,106,.5); border-radius: 30px; background: rgba(9,9,9,.78); color: #f2d98d; font-size: 22px; letter-spacing: .12em; text-transform: uppercase }
+@keyframes guest-slide-in { from { opacity: 0 } to { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .guest-display-slide { animation: none } }
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }

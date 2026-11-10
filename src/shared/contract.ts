@@ -19,6 +19,7 @@ export type PhotoRecoveryIssue = { kind: 'orphan-photo' | 'incomplete-write' | '
 export type SavedPhoto = { id: string; width: number; height: number; byteLength: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type PhotoRecord = SavedPhoto & { fileName: string; mimeType: 'image/jpeg' };
 export type FontRecord = { id: string; name: string; fileName: string; format: 'ttf' | 'otf' | 'woff' | 'woff2'; byteLength: number; addedAt: string };
+export type SlideshowSettings = { enabled: boolean; secondsPerSlide: 4 | 6 | 10; limit: 20 | 50 | 100 };
 export type SavedVideo = { id: string; width: number; height: number; byteLength: number; durationMs: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type VideoRecord = SavedVideo & { fileName: string; mimeType: 'video/webm' };
 export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; createdAt: string; updatedAt: string };
@@ -99,6 +100,10 @@ export type Bridge = {
   updateEvent(id: string, value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
+  getSlideshowSettings(): Promise<SlideshowSettings>;
+  saveSlideshowSettings(value: SlideshowSettings): Promise<SlideshowSettings>;
+  getSlideshowPhotoIds(): Promise<{ settings: SlideshowSettings; ids: string[] }>;
+  readSlideshowPhoto(id: string): Promise<string>;
   listFonts(): Promise<FontRecord[]>;
   importFonts(): Promise<{ added: FontRecord[]; failed: string[] }>;
   addFontBytes(fileName: string, bytes: Uint8Array): Promise<FontRecord>;
