@@ -33,31 +33,31 @@
 body, button, input, select, textarea { font-family: var(--font-ui) }
 body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .brand-wordmark { font-family: var(--font-heading); font-weight: var(--font-medium); line-height: 1.1; letter-spacing: .075em; color: var(--gold-light) }
-.brand-subtitle { font-family: var(--font-ui); font-weight: var(--font-regular); font-size: 11px; line-height: 1.6; letter-spacing: .3em }
+.brand-subtitle { font-family: var(--font-ui); font-weight: var(--font-regular); font-size: var(--fs-md); line-height: 1.6; letter-spacing: .3em }
 .brand-button { display:flex; align-items:center; justify-content:flex-start; gap:10px; min-height:54px; padding:4px 9px 12px }
 .brand-symbol { display:block; flex:0 0 42px; width:42px; height:42px }
 .brand-lockup { display:grid; gap:4px; min-width:0 }
 .brand-lockup .brand-wordmark { font-size:31px; line-height:.92 }
-.brand-lockup small { margin:0; color:#d8c18f; font-size:7px; font-weight:500; letter-spacing:.2em; white-space:nowrap }
+.brand-lockup small { margin:0; color:var(--gold-pale); font-size:var(--fs-3xs); font-weight:500; letter-spacing:.2em; white-space:nowrap }
 .gate-symbol, .brand-mark, .avatar { font-family: var(--font-heading); font-weight: var(--font-medium) }
-.side-label:lang(th) { font-size: 11px; line-height: 1.6; letter-spacing: 0 }
+.side-label:lang(th) { font-size: var(--fs-md); line-height: 1.6; letter-spacing: 0 }
 .event-copy { gap: calc(var(--space-unit) * 2) }
 .section-heading { gap: calc(var(--space-unit) * 3) }
 .page-content h1, .gate-card h1, .welcome-panel h2 { font-family: var(--font-heading); font-weight: var(--font-regular); color: var(--text); line-height: 1.18; text-shadow: none }
 .page-content h1:lang(th), .gate-card h1:lang(th), .welcome-panel h2:lang(th) { font-family: var(--font-ui); line-height: 1.5; letter-spacing: 0 }
 .gate-card h1:lang(th) { font-size: clamp(26px,2.1vw,34px); text-wrap: balance }
 .studio-heading h1 { font-size: clamp(40px,3.9vw,60px); letter-spacing: -.025em }
-.studio-tagline { font-size: 11px; line-height: 1.8; color: var(--secondary); letter-spacing: .22em }
+.studio-tagline { font-size: var(--fs-md); line-height: 1.8; color: var(--secondary); letter-spacing: .22em }
 .studio-tagline:lang(th), .capture-caption:lang(th), .storage-ready:lang(th) { letter-spacing: 0; line-height: 1.8 }
 .sidebar nav button, .sidebar-account { font-weight: var(--font-regular); line-height: 1.65 }
-.topbar, .camera-select-label select { font-size: 12px; font-weight: var(--font-regular) }
-.camera-top-status, .license-chip, .sidebar-license, .edition-meta, .edition-meta small { font-size: 11px; line-height: 1.6 }
-.panel-kicker, .eyebrow { font-size: 11px; line-height: 1.7; font-weight: var(--font-medium); color: var(--secondary); letter-spacing: .18em }
-.setting-row > span, .event-copy strong, .settings label, .camera-heading h2 { font-size: 14px; line-height: 1.6; font-weight: var(--font-medium) }
-.lead, .settings small, .storage-settings p, .diagnostics-link p, .gate-card p, .event-copy small, .camera-placeholder small, .strip-empty, .strip-heading small { font-size: 12px; line-height: 1.75; font-weight: var(--font-regular); color: var(--secondary) }
+.topbar, .camera-select-label select { font-size: var(--fs-base); font-weight: var(--font-regular) }
+.camera-top-status, .license-chip, .sidebar-license, .edition-meta, .edition-meta small { font-size: var(--fs-md); line-height: 1.6 }
+.panel-kicker, .eyebrow { font-size: var(--fs-md); line-height: 1.7; font-weight: var(--font-medium); color: var(--secondary); letter-spacing: .18em }
+.setting-row > span, .event-copy strong, .settings label, .camera-heading h2 { font-size: var(--fs-xl); line-height: 1.6; font-weight: var(--font-medium) }
+.lead, .settings small, .storage-settings p, .diagnostics-link p, .gate-card p, .event-copy small, .camera-placeholder small, .strip-empty, .strip-heading small { font-size: var(--fs-base); line-height: 1.75; font-weight: var(--font-regular); color: var(--secondary) }
 .primary, .capture-button, .preview-start { font-weight: var(--font-semibold) }
 .camera-secondary, .segmented-control button, .quick-action-grid > button, .export-button { font-weight: var(--font-regular) }
-.capture-caption, .export-latest, .coming-action, .coming-action small { font-size: 11px; line-height: 1.6 }
+.capture-caption, .export-latest, .coming-action, .coming-action small { font-size: var(--fs-md); line-height: 1.6 }
 
 /* Architectural brass seams live on the matte frame, never on camera pixels. */
 .shell { position: relative; isolation: isolate; border-color: rgba(156,128,80,.52) }
@@ -120,7 +120,7 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-brand-lockup>img { width:48px; height:48px }
 .guest-brand-lockup>span { display:grid; gap:4px }
 .guest-brand-lockup .brand-wordmark { font-size:29px }
-.guest-brand-lockup .brand-subtitle { color:#d8c18f; font-size:8px; letter-spacing:.2em }
+.guest-brand-lockup .brand-subtitle { color:var(--gold-pale); font-size:var(--fs-2xs); letter-spacing:.2em }
 .guest-heading { padding:22px 0 10px; text-align:center }
 .guest-heading h1 { margin:4px 0 8px }
 .guest-heading p:last-child { margin:0; color:var(--secondary) }
@@ -139,14 +139,14 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-camera-panel .capture-disc>span { width:68px; height:68px }
 .guest-composition { display:grid; justify-items:center; gap:10px; padding:12px; border:1px solid var(--border-quiet); border-radius:12px; background:var(--panel) }
 .guest-composition img { display:block; width:min(100%,320px); max-height:40vh; object-fit:contain; border-radius:7px; background:#111 }
-.camera-capability-note { margin:8px 0; color:var(--secondary); font-size:12px; line-height:1.6 }
+.camera-capability-note { margin:8px 0; color:var(--secondary); font-size:var(--fs-base); line-height:1.6 }
 .capture-session-list { display:grid; gap:12px; margin-top:20px }
 .capture-session-card { padding:16px; border:1px solid var(--border-quiet); border-radius:12px; background:var(--panel) }
 .capture-session-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:14px }
 .capture-session-heading > div { display:grid; gap:5px }
 .capture-session-heading strong { font-size:15px }
-.capture-session-heading small,.capture-session-detail { color:var(--secondary); font-size:12px }
-.session-status { padding:5px 9px; border:1px solid var(--border); border-radius:999px; color:var(--secondary); font-size:11px }
+.capture-session-heading small,.capture-session-detail { color:var(--secondary); font-size:var(--fs-base) }
+.session-status { padding:5px 9px; border:1px solid var(--border); border-radius:999px; color:var(--secondary); font-size:var(--fs-md) }
 .session-confirmed { color:#a9c5a3 }
 .session-review,.session-interrupted { color:#e4c77f }
 .capture-session-detail { margin-top:10px }
@@ -172,18 +172,18 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-preview-copy { position:relative; z-index:1; display:grid; justify-items:center; gap:10px; color:var(--gold-light); text-align:center }
 .guest-preview-copy img { width:64px; height:64px; margin-bottom:5px }
 .guest-preview-copy .brand-wordmark { font-size:clamp(39px,6vw,72px) }
-.guest-preview-copy small { color:#f2eee5; font-size:10px; letter-spacing:.28em }
-.guest-preview-badge { position:absolute; z-index:1; right:14px; bottom:14px; display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid rgba(216,181,106,.26); border-radius:30px; background:#090909c9; color:#e9d8ad; font-size:9px; letter-spacing:.1em }
+.guest-preview-copy small { color:#f2eee5; font-size:var(--fs-sm); letter-spacing:.28em }
+.guest-preview-badge { position:absolute; z-index:1; right:14px; bottom:14px; display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid rgba(216,181,106,.26); border-radius:30px; background:#090909c9; color:#e9d8ad; font-size:var(--fs-xs); letter-spacing:.1em }
 .guest-preview-badge i { width:6px; height:6px; border-radius:50%; background:#8ba88e }
 .guest-preview-controls { display:grid; align-content:start; justify-items:start; gap:12px; padding:22px; border:1px solid rgba(255,255,255,.08); border-radius:12px; background:var(--panel) }
 .guest-preview-controls h2 { margin:0; font-size:15px }
-.guest-preview-controls p { margin:0; color:var(--secondary); font-size:11px; line-height:1.75 }
+.guest-preview-controls p { margin:0; color:var(--secondary); font-size:var(--fs-md); line-height:1.75 }
 .guest-preview-controls .guest-display-target { display:grid; width:100%; margin:4px 0 }
 .guest-preview-controls hr { width:100%; margin:8px 0; border:0; border-top:1px solid rgba(255,255,255,.1) }
 .sample-session-card { display:flex; align-items:center; justify-content:space-between; gap:15px; margin-top:12px; padding:14px 16px; border:1px solid rgba(216,181,106,.23); border-radius:9px; background:linear-gradient(105deg,rgba(216,181,106,.09),rgba(16,16,16,.8)) }
 .sample-session-card strong,.sample-session-card small { display:block }
-.sample-session-card strong { margin-bottom:5px; color:#ead7aa; font-size:11px }
-.sample-session-card small { max-width:440px; color:var(--secondary); font-size:9px; line-height:1.65 }
+.sample-session-card strong { margin-bottom:5px; color:#ead7aa; font-size:var(--fs-md) }
+.sample-session-card small { max-width:440px; color:var(--secondary); font-size:var(--fs-xs); line-height:1.65 }
 .sample-session-card button { flex:0 0 auto }
 @media (max-width:850px) { .guest-preview-layout { grid-template-columns:1fr }.guest-preview-stage { min-height:300px } }
 @media (max-width:620px) { .guest-preview-controls { padding:16px }.sample-session-card { align-items:stretch; flex-direction:column }.sample-session-card button { width:100% } }
@@ -205,9 +205,9 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 /* Single next action above the readiness grid, so a new operator always knows what to do first. */
 .next-step { display: flex; align-items: center; gap: 14px; margin: 0 0 12px; padding: 12px 16px; border: 1px solid rgba(214,179,106,.35); border-radius: 10px; background: rgba(214,179,106,.07) }
 .next-step.all-ready { border-color: rgba(120,200,150,.35); background: rgba(120,200,150,.06) }
-.next-step-label { flex: 0 0 auto; color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .14em }
+.next-step-label { flex: 0 0 auto; color: var(--gold); font-size: var(--fs-md); font-weight: 700; letter-spacing: .14em }
 .next-step:lang(th) .next-step-label, .app:lang(th) .next-step-label { letter-spacing: 0 }
-.next-step strong { flex: 1 1 auto; min-width: 0; font-weight: 500; font-size: 14px }
+.next-step strong { flex: 1 1 auto; min-width: 0; font-weight: 500; font-size: var(--fs-xl) }
 .next-step .primary { flex: 0 0 auto; min-height: 38px }
 
 /* Collapsible group for rarely used settings. */
@@ -216,14 +216,14 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .advanced-settings > summary::-webkit-details-marker { display: none }
 .advanced-settings > summary::before { content: '＋'; color: var(--gold) }
 .advanced-settings[open] > summary::before { content: '－' }
-.advanced-settings > summary small { color: #8d8c85; font-weight: 400; font-size: 12px }
+.advanced-settings > summary small { color: #8d8c85; font-weight: 400; font-size: var(--fs-base) }
 .advanced-settings > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
 .advanced-settings[open] > summary { margin-bottom: 14px }
 .advanced-settings > section { margin-top: 14px }
 
 /* Template editor groups: basic fields stay visible, the rest folds away. */
 .template-advanced { display: grid; gap: 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 0 14px }
-.template-advanced > summary { cursor: pointer; padding: 12px 0; font-size: 13px; line-height: 1.5; font-weight: 600; list-style: none }
+.template-advanced > summary { cursor: pointer; padding: 12px 0; font-size: var(--fs-lg); line-height: 1.5; font-weight: 600; list-style: none }
 .template-advanced > summary::-webkit-details-marker { display: none }
 .template-advanced > summary::before { content: '＋ '; color: var(--gold) }
 .template-advanced[open] > summary::before { content: '－ ' }
@@ -237,7 +237,7 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-camera-panel .sample-session-card { display: none }
 .guest-camera-panel .capture-strip { grid-template-columns: minmax(0,1fr) 150px }
 .guest-camera-panel .capture-disc { width: 120px; height: 120px }
-.guest-camera-panel .capture-caption { font-size: 13px; letter-spacing: .12em }
+.guest-camera-panel .capture-caption { font-size: var(--fs-lg); letter-spacing: .12em }
 .guest-heading { padding: 10px 0 4px }
 .guest-heading h1 { font-size: 28px; margin: 2px 0 4px }
 .guest-camera-panel .camera-preview { max-height: calc(100vh - 480px); min-height: 220px }
@@ -248,12 +248,12 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-camera-panel.guest-reviewing .guest-round-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 320px)); justify-content: center; gap: 14px }
 .guest-camera-panel.guest-reviewing .review-feedback { flex-wrap: wrap; gap: 16px; padding: 18px 20px }
 .guest-camera-panel.guest-reviewing .review-feedback strong { font-size: 22px }
-.guest-camera-panel.guest-reviewing .review-feedback span { font-size: 14px }
+.guest-camera-panel.guest-reviewing .review-feedback span { font-size: var(--fs-xl) }
 .guest-camera-panel.guest-reviewing .review-actions { display: flex; gap: 12px }
 .guest-camera-panel.guest-reviewing .review-actions button { min-height: 64px; padding: 0 30px; font-size: 18px; border-radius: 12px }
 /* Guest layout polish: the panel must fill the page (it used to shrink to the preview's minimum), and the notice must not cover the shutter. */
 .guest-capture .guest-camera-panel { width: 100% }
-.guest-capture ~ .notice { top: 14px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); font-size: 14px; padding: 12px 18px }
+.guest-capture ~ .notice { top: 14px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); font-size: var(--fs-xl); padding: 12px 18px }
 @media (max-height: 800px) {
   .guest-toolbar { padding: 8px 0 10px }
   .guest-heading { padding: 6px 0 2px }
@@ -264,11 +264,11 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
-.template-presets legend { padding: 0; margin-bottom: 8px; font-size: 12px; font-weight: 600 }
+.template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }
 .template-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px }
 .template-preset-grid button { display: grid; gap: 2px; min-height: 52px; padding: 8px 10px; text-align: left; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: transparent; color: inherit; cursor: pointer }
 .template-preset-grid button:hover { border-color: rgba(214,179,106,.5) }
 .template-preset-grid button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
-.template-preset-grid strong { font-size: 13px; font-weight: 600 }
-.template-preset-grid small { color: #8d8c85; font-size: 11px }
-.template-presets > small { color: #8d8c85; font-size: 12px; line-height: 1.5 }
+.template-preset-grid strong { font-size: var(--fs-lg); font-weight: 600 }
+.template-preset-grid small { color: #8d8c85; font-size: var(--fs-md) }
+.template-presets > small { color: #8d8c85; font-size: var(--fs-base); line-height: 1.5 }
