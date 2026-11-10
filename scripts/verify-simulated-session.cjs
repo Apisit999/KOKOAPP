@@ -596,6 +596,34 @@ app.on('browser-window-created', (_event, win) => {
         win.webContents.disableDeviceEmulation();
         report.cloudOk = opOk && serverOk && retryOk && guestResults.every(r => r.ok);
         if (!report.cloudOk) throw new Error('Cloud album check failed: ' + JSON.stringify({ opOk, serverOk, retryOk, guestResults }));
+      } else if (phase === 'summary') {
+        // The per-event Summary on the Events page must match what the stored capture sessions say (counts computed here independently of the app's own code).
+        stage = 'summary';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        await clickButton(win, '.sidebar nav button', 'Events');
+        await waitFor(win, `Boolean(document.querySelector('.event-card'))`, 'event card', 10000);
+        const eventsList = (await evaluate(win, `window.koko.listEvents()`)).events;
+        const target = eventsList.find(item => item.name === 'Simulated QA event') || eventsList[0];
+        const all = [];
+        for (let offset = 0; ; offset += 100) { const page = await evaluate(win, `window.koko.listCaptureSessions(100, ${offset})`); all.push(...page); if (page.length < 100) break; }
+        const own = all.filter(item => item.eventId === target.id);
+        const count = status => own.filter(item => item.status === status).length;
+        const confirmed = own.filter(item => item.status === 'confirmed');
+        const expected = { confirmed: confirmed.length, rounds: own.length, photos: confirmed.reduce((sum, item) => sum + item.photoIds.length, 0), videos: confirmed.reduce((sum, item) => sum + (item.videoIds || []).length, 0), retaken: count('retaken'), cancelled: count('cancelled') };
+        expected.unfinished = own.length - expected.confirmed - expected.retaken - expected.cancelled;
+        const clicked = await evaluate(win, `(() => { const card = Array.from(document.querySelectorAll('.event-card')).find(c => c.querySelector('h3') && c.querySelector('h3').textContent.trim() === ${JSON.stringify(target.name)}); const b = card && Array.from(card.querySelectorAll('button')).find(x => x.textContent.trim() === 'Summary'); if (b) b.click(); return Boolean(b); })()`);
+        if (!clicked) throw new Error('Summary button not found');
+        await waitFor(win, `Boolean(document.querySelector('.event-summary'))`, 'summary block', 10000);
+        const shown = await evaluate(win, `(() => { const rows = Object.fromEntries(Array.from(document.querySelectorAll('.event-summary > div')).map(d => [d.querySelector('dt').textContent.trim(), d.querySelector('dd').textContent.trim()])); return { rows, overflowX: document.documentElement.scrollWidth > innerWidth }; })()`);
+        await shot(win, 'event-summary');
+        const rows = shown.rows;
+        const actual = { completed: rows['Completed rounds'], photos: rows['Photos / clips'], other: rows['Retaken / cancelled / unfinished'] };
+        const want = { completed: `${expected.confirmed} / ${expected.rounds}`, photos: `${expected.photos} / ${expected.videos}`, other: `${expected.retaken} / ${expected.cancelled} / ${expected.unfinished}` };
+        const ok = actual.completed === want.completed && actual.photos === want.photos && actual.other === want.other && !shown.overflowX;
+        step('event-summary', { actual, want, rowsShown: Object.keys(rows), overflowX: shown.overflowX, ok });
+        report.summaryOk = ok;
+        if (!ok) throw new Error('Event summary does not match stored sessions: ' + JSON.stringify({ actual, want }));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -673,5 +701,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "cloud"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "summary", "cloud"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
