@@ -295,6 +295,64 @@ app.on('browser-window-created', (_event, win) => {
         await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
         report.allOk = results.every(r => r.ok);
         if (!report.allOk) throw new Error('Guest video round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
+      } else if (phase === 'kill-mid-round') {
+        // Starts a 4-photo round and hard-kills the whole process once two photos are on disk. Run `after-kill` on the same profile next.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        stage = 'kill prepare';
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button');
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled)`, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await clickCount(win, 4);
+        const photosBefore = (await evaluate(win, `window.koko.getPhotoStorageStatus()`)).photoCount;
+        const sessionsBefore = (await evaluate(win, `window.koko.listCaptureSessions(200, 0)`)).length;
+        stage = 'kill mid round';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        let seen = 0;
+        for (let i = 0; i < 200 && seen < photosBefore + Number(process.env.KOKO_QA_KILL_AFTER || 2); i++) { seen = (await evaluate(win, `window.koko.getPhotoStorageStatus()`)).photoCount; if (seen < photosBefore + Number(process.env.KOKO_QA_KILL_AFTER || 2)) await wait(25); }
+        report.killed = { photosBefore, sessionsBefore, photosAtKill: seen };
+        fs.writeFileSync(path.join(output, 'kill-state.json'), JSON.stringify(report.killed));
+        fs.writeFileSync(path.join(output, 'report-kill-mid-round.json'), JSON.stringify(report, null, 2));
+        console.log('KILLING at', JSON.stringify(report.killed));
+        process.kill(process.pid, 'SIGKILL');
+      } else if (phase === 'after-kill') {
+        stage = 'after kill';
+        const state = JSON.parse(fs.readFileSync(path.join(output, 'kill-state.json'), 'utf8'));
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1500);
+        const sessions = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        const status = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+        const issues = await evaluate(win, `window.koko.inspectPhotoRecovery()`);
+        const killed = sessions[0];
+        const photos = await evaluate(win, `window.koko.listPhotos(0, 100)`);
+        const stored = new Set(photos.map(p => p.id));
+        const missing = (killed?.photoIds ?? []).filter(id => !stored.has(id));
+        step('after-kill', { sessionsAdded: sessions.length - state.sessionsBefore, killedStatus: killed?.status, sessionPhotos: (killed?.photoIds ?? []).length, photoCount: status.photoCount, photosAtKill: state.photosAtKill, pendingRecovery: status.pendingRecovery, issues, missing });
+        // The app must still work: take a normal 1-photo round and finish it.
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button');
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled)`, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await clickCount(win, 1);
+        stage = 'round after kill';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Finish round'), 'review after kill', 30000);
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`, 'ready after finish', 20000);
+        const after = await evaluate(win, `window.koko.listCaptureSessions(200, 0)`);
+        const finalStatus = await evaluate(win, `window.koko.getPhotoStorageStatus()`);
+        const bad = issues.filter(i => ['invalid-index', 'missing-photo', 'storage-unavailable'].includes(i.kind));
+        const ok = ['interrupted', 'review'].includes(killed?.status) && sessions.length - state.sessionsBefore === 1 && missing.length === 0 && bad.length === 0
+          && (killed.photoIds.length >= 1 && killed.photoIds.length <= 4) && status.photoCount >= state.photosBefore + killed.photoIds.length
+          && after[0]?.status === 'confirmed' && after.length === sessions.length + 1 && finalStatus.photoCount === status.photoCount + 1 && finalStatus.pendingRecovery === status.pendingRecovery;
+        step('round-after-kill', { latestStatus: after[0]?.status, sessions: after.length, photos: finalStatus.photoCount, ok });
+        report.killOk = ok;
+        if (!ok) throw new Error('State after a mid-round kill is not clean');
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -372,5 +430,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
