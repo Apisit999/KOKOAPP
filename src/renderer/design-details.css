@@ -277,6 +277,15 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 
 .guest-camera-panel.guest-reviewing .guest-review-warning { flex-basis: 100%; order: 3; padding: 10px 14px; border: 1px solid rgba(240,160,120,.5); border-radius: 10px; background: rgba(240,160,120,.1); color: #ffd9c4; font-size: var(--fs-xl) }
 
+/* Guest review on short landscape screens (about 720px high): compact photos and a side-by-side album QR so the QR is visible without scrolling. */
+@media (max-height: 800px) and (orientation: landscape) {
+  .guest-camera-panel.guest-reviewing .guest-round-grid { grid-template-columns: repeat(auto-fit, minmax(80px, 120px)); gap: 8px }
+  .guest-camera-panel.guest-reviewing .guest-composition img { max-height: 24vh }
+  .guest-camera-panel.guest-reviewing .photo-cloud-share button { display: none }
+  .guest-camera-panel.guest-reviewing .private-album-qr { grid-auto-flow: column; width: auto; gap: 14px; padding: 8px 14px; align-items: center }
+  .guest-camera-panel.guest-reviewing .private-album-qr img { width: 130px }
+}
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }

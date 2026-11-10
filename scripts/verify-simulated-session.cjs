@@ -25,6 +25,29 @@ if (phase === 'disk-full' || phase === 'guest-disk-full') {
     return realWrite.call(this, target, data, ...rest);
   };
 }
+// Simulated account cloud (phase cloud): the app talks to /v1/desktop/cloud/* and PUTs photos to an https URL; both go through the global fetch.
+let cloudMode = 'ok'; const cloudMock = { events: 0, inits: 0, puts: 0, confirms: 0, shares: 0, uploaded: new Set(), putBytes: 0, shareUrls: [] };
+if (phase === 'cloud') {
+  const realFetch = globalThis.fetch;
+  const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String((input && input.url) || input);
+    if (url.startsWith('https://qa-upload.invalid/')) {
+      if (cloudMode === 'down') throw new TypeError('network down');
+      cloudMock.puts++; cloudMock.putBytes += init.body ? init.body.length : 0; return new Response(null, { status: 200 });
+    }
+    const at = url.indexOf('/v1/desktop/cloud/');
+    if (at < 0) return realFetch(input, init);
+    if (cloudMode === 'down') return reply(503, { code: 'server_error' });
+    const route = url.slice(at + '/v1/desktop/cloud/'.length); const body = JSON.parse(init.body || '{}');
+    if (route === 'events') { cloudMock.events++; return reply(200, { eventId: require('node:crypto').randomBytes(16).toString('hex') }); }
+    if (route === 'photos/init') { cloudMock.inits++; return cloudMock.uploaded.has(body.photoId) ? reply(200, { alreadyUploaded: true }) : reply(200, { uploadUrl: 'https://qa-upload.invalid/' + body.photoId }); }
+    if (route === 'photos/confirm') { cloudMock.confirms++; cloudMock.uploaded.add(body.photoId); return reply(200, { ok: true }); }
+    if (route === 'shares') { cloudMock.shares++; const link = 'http://127.0.0.1:8787/share#qa-' + body.sessionId; cloudMock.shareUrls.push(link); return reply(200, { url: link, expiresAt: new Date(Date.now() + 7 * 864e5).toISOString() }); }
+    if (route === 'shares/revoke') return reply(200, { ok: true });
+    return reply(404, { code: 'not_found' });
+  };
+}
 let started = false;
 let stage = 'startup';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -491,6 +514,88 @@ app.on('browser-window-created', (_event, win) => {
         await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
         report.allOk = results.every(r => r.ok);
         if (!report.allOk) throw new Error('Guest full-disk round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
+      } else if (phase === 'cloud') {
+        // Paid plan with online albums against the local License/Photo-cloud server: QR + private album link in the operator review and in Guest mode, and the uploaded photo is really on the server.
+        const key = process.env.KOKO_QA_LICENSE_KEY;
+        if (!key) throw new Error('Set KOKO_QA_LICENSE_KEY to a paid-plan key issued by the local server');
+        const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+        const readyJs = `Boolean(document.querySelector('.capture-disc') && !document.querySelector('.capture-disc').disabled) && !(${hasText('Finish round')})`;
+        stage = 'cloud setup';
+        await evaluate(win, `window.koko.saveSettings({ language: 'en', highContrast: false, fullscreen: false })`);
+        const license = await evaluate(win, `window.koko.activateLicense(${JSON.stringify(key)})`);
+        step('license', { state: license.state, features: license.features });
+        if (license.state !== 'active' || !license.features.includes('cloud_sync')) throw new Error('Paid key did not activate with cloud_sync: ' + JSON.stringify(license));
+        await evaluate(win, `window.koko.choosePhotoStorage()`);
+        const event = await evaluate(win, `window.koko.createEvent({ name: 'Cloud QA event', date: null, notes: '' })`);
+        await evaluate(win, `window.koko.setActiveEvent(${JSON.stringify(event.id)})`);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(800);
+        await clickButton(win, '.sidebar nav button', 'Capture');
+        await waitFor(win, hasText('Start live preview'), 'preview button', 15000);
+        await clickButton(win, 'button', 'Start live preview');
+        await waitFor(win, readyJs, 'capture ready', 20000);
+        await clickButton(win, '.countdown-options button', 'OFF');
+        await clickCount(win, 1);
+        stage = 'cloud operator round';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Finish round'), 'review', 30000);
+        try { await waitFor(win, `Boolean(document.querySelector('.photo-cloud-share .private-album-qr img'))`, 'album QR in operator review', 40000); } catch (error) { throw new Error(error.message + ' | cloud note: ' + (await evaluate(win, `(document.querySelector('.photo-cloud-share') || {}).innerText || '(no cloud block)'`))); }
+        const op = await evaluate(win, `(() => { const img = document.querySelector('.photo-cloud-share .private-album-qr img'); return { text: document.querySelector('.photo-cloud-share').innerText, qrLoaded: Boolean(img && img.complete && img.naturalWidth > 20), qrSrcIsData: /^data:image/.test(img ? img.src : ''), copyButton: Array.from(document.querySelectorAll('.photo-cloud-share button')).some(b => /Copy private album link/.test(b.textContent)) }; })()`);
+        await shot(win, 'cloud-operator-review');
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after finish', 20000);
+        const session = (await evaluate(win, `window.koko.listCaptureSessions(1, 0)`))[0];
+        const sync = await evaluate(win, `window.koko.syncPhotoCloudSession(${JSON.stringify(session.id)})`);
+        step('cloud-account', { shareIsMockLink: sync.shareUrl === cloudMock.shareUrls[0], uploadedCount: sync.uploadedCount, mediaCount: sync.mediaCount, events: cloudMock.events, puts: cloudMock.puts, confirms: cloudMock.confirms, shares: cloudMock.shares, putBytes: cloudMock.putBytes });
+        const opOk = op.qrLoaded && op.qrSrcIsData && op.copyButton && /uploaded to its private album/.test(op.text);
+        const serverOk = Boolean(sync.shareUrl) && sync.shareUrl === cloudMock.shareUrls[0] && sync.uploadedCount === sync.mediaCount && sync.mediaCount === 1 && cloudMock.puts === 1 && cloudMock.confirms === 1 && cloudMock.events === 1 && cloudMock.putBytes > 1000;
+        // The cloud is down: the round must still finish locally, say the upload is incomplete, and Retry upload must recover once it is back.
+        stage = 'cloud down then retry';
+        cloudMode = 'down';
+        await evaluate(win, `document.querySelector('.capture-disc').click()`);
+        await waitFor(win, hasText('Finish round'), 'review while cloud down', 30000);
+        await waitFor(win, `/cloud upload is incomplete/.test((document.querySelector('.photo-cloud-share') || {}).innerText || '')`, 'incomplete notice', 40000);
+        const downState = await evaluate(win, `({ qr: Boolean(document.querySelector('.photo-cloud-share .private-album-qr')), retry: Array.from(document.querySelectorAll('.photo-cloud-share button')).some(b => /Retry upload/.test(b.textContent)), saved: document.body.innerText.includes('saved') })`);
+        await shot(win, 'cloud-down-review');
+        cloudMode = 'ok';
+        await clickButton(win, '.photo-cloud-share button', 'Retry upload');
+        await waitFor(win, `Boolean(document.querySelector('.photo-cloud-share .private-album-qr img'))`, 'QR after retry', 40000);
+        const afterRetry = await evaluate(win, `({ text: document.querySelector('.photo-cloud-share').innerText })`);
+        await clickButton(win, 'button', 'Finish round');
+        await waitFor(win, readyJs, 'ready after retry round', 20000);
+        const retryOk = !downState.qr && downState.retry && /uploaded to its private album/.test(afterRetry.text) && cloudMock.puts === 2 && cloudMock.confirms === 2;
+        step('cloud-retry', { downState, afterRetry: afterRetry.text.slice(0, 80), puts: cloudMock.puts, confirms: cloudMock.confirms, retryOk });
+        step('cloud-operator', { ...op, opOk, serverOk });
+        // Guest mode: the QR is what the guest scans.
+        stage = 'cloud guest round';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        await evaluate(win, `document.querySelector('.brand-button').click()`);
+        await waitFor(win, hasText('Start Guest mode'), 'dashboard', 8000);
+        await clickButton(win, 'button', 'Start Guest mode');
+        await clickButton(win, 'button', 'Stay in Photobooth');
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        const guestResults = [];
+        for (const [w, h] of [[1280, 720], [800, 1280]]) {
+          win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
+          await wait(900);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'guest ready', 20000);
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'guest review', 40000);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .private-album-qr img'))`, 'guest QR', 40000);
+          await wait(800);
+          const g = await evaluate(win, `(() => { const img = document.querySelector('.guest-capture .private-album-qr img'); const r = img.getBoundingClientRect(); const buttons = Array.from(document.querySelectorAll('.guest-capture .review-actions button')).map(b => Math.round(b.getBoundingClientRect().bottom)); const bar = document.querySelector('.guest-capture .review-feedback').getBoundingClientRect(); return { innerHeight, qrLoaded: img.complete && img.naturalWidth > 20, qrSize: [Math.round(r.width), Math.round(r.height)], qrTop: Math.round(r.top), qrBottom: Math.round(r.bottom), barTop: Math.round(bar.top), buttons, overflowX: document.documentElement.scrollWidth > innerWidth }; })()`);
+          await shot(win, `cloud-guest-${w}x${h}-review`);
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`, 'guest ready again', 20000);
+          const stale = await evaluate(win, `document.querySelectorAll('.guest-capture .private-album-qr').length`);
+          const entry = { size: `${w}x${h}`, ...g, stale, ok: g.qrLoaded && g.qrSize[0] >= 100 && g.qrBottom <= g.innerHeight && g.qrTop >= 0 && !g.overflowX && g.buttons.every(b => b <= h) && stale === 0 };
+          guestResults.push(entry); step(`cloud-guest-${w}x${h}`, entry);
+        }
+        win.webContents.disableDeviceEmulation();
+        report.cloudOk = opOk && serverOk && retryOk && guestResults.every(r => r.ok);
+        if (!report.cloudOk) throw new Error('Cloud album check failed: ' + JSON.stringify({ opOk, serverOk, retryOk, guestResults }));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -568,5 +673,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full", "cloud"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));
