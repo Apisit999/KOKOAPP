@@ -262,6 +262,14 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
   .guest-camera-panel .camera-preview { max-height: calc(100vh - 400px) }
 }
 
+/* Landscape screens 720-800px high: reclaim vertical space so the preview is not tiny. Not yet measured on a real screen. */
+@media (max-height: 800px) and (orientation: landscape) {
+  .guest-camera-panel .camera-preview { max-height: calc(100vh - 330px); min-height: 260px }
+  .guest-camera-panel .capture-disc { width: 72px; height: 72px }
+  .guest-camera-panel .capture-disc>span { width: 54px; height: 54px }
+  .guest-camera-panel .strip-heading { display: none }
+}
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }
