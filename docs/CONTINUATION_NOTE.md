@@ -1,6 +1,16 @@
 # Continuation note — KOKO Studio 0.1.29
 
-Last updated: 2026-11-05
+Last updated: 2026-11-10
+
+## Handoff (2026-11-10): read this first
+
+- Branch `main` is 13 commits ahead of `origin/main` (last pushed 89e7ed0, then everything up to 441a82a is local only). **Nothing has been pushed since; the owner wanted to test by hand first.** Ask before pushing.
+- Since 0.1.29 (all on 2026-11-10): Guest mode kiosk fixes and video clips (template setting "Guest captures"), kill/disk-full recovery fixes, album QR on short screens, custom fonts, import-your-own-design (PNG with transparent windows), a Content-Security-Policy fix (`connect-src` now allows `data:` and `blob:`; without it frame PNGs and stickers could not be composed), live slideshow on the guest display, and template sizes (vertical 2x6 strip, 4x6 portrait/landscape, square, story, 5x7; 1 to 4 photos; 2 strips per 4x6 sheet when printing).
+- Tests: `npm run typecheck` and every `npm run test:*` pass (31 suites). End-to-end checks live in `scripts/verify-simulated-session.cjs` (phases: first, guest, guest-resume, guest-sizes, guest-multi, guest-video, guest-disk-full, rounds, video, summary, disk-full, kill-mid-round + after-kill, csp, fonts, design, slideshow, sizes, cloud) and `scripts/verify-renderer-ui.cjs`; all passed on 2026-11-10. How to run them, the throwaway-QA-package rule and per-phase prerequisites are in docs/TEST_PLAN.md. Run `first` on a fresh artifact directory first; Guest phases leave a profile in Guest mode, so run operator phases (fonts, slideshow, rounds, video, summary, disk-full, sizes) before them or use another profile.
+- After any QA run: stop the license server on port 8787, unset the `KOKO_*` variables, run `npm run package` again, and confirm `out/` contains no `MIIBojANBgkqhkiG9w0BAQEFAAOCAY8A`. The package in `out/` is currently clean.
+- Not tested anywhere: a real camera, printer (including the 2-strips-per-sheet print), touch screen, second monitor, the target PC, the real account cloud (only a simulated API) and scanning the QR with a phone.
+- Open ideas, in the order I would do them: (1) a print preview of the 4x6 sheet with two strips; (2) more sizes (A4/A5, 6-photo strip); (3) configurable Guest clip length (fixed 10 s now); (4) whole-event gallery with a PIN, which needs the cloud server code that is not in this repo; (5) filters / GIF from the older Phase 4 list.
+- Compared with qdrop.app the booth covers roughly a third of the features that site claims (it is a gallery/sales platform); the missing parts (face search, selling, FTP receiver, multi-camera, gallery PIN/branding) need server work.
 
 ## Status since 0.1.26
 
