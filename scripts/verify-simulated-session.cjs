@@ -16,7 +16,7 @@ dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [storageDir] 
 const report = { phase, steps: [], rendererErrors: [] };
 // Full-disk simulation (phase disk-full): fail photo-byte writes with ENOSPC after `fullAfter` successful ones.
 let fullAfter = Infinity; let fdWrites = 0; let failMode = 'all';
-if (phase === 'disk-full') {
+if (phase === 'disk-full' || phase === 'guest-disk-full') {
   const nodeFs = require('node:fs'); const realWrite = nodeFs.writeFileSync;
   nodeFs.writeFileSync = function (target, data, ...rest) {
     if (typeof target === 'number' && fullAfter !== Infinity && data && data.length > 50 && (failMode === 'all' || typeof data !== 'string')) {
@@ -440,6 +440,57 @@ app.on('browser-window-created', (_event, win) => {
           && end.photos === base3.photos + 1 && end.pending === 0 && !badKinds(end.issues).length && latest?.status === 'confirmed';
         report.diskFullOk = ok;
         if (!ok) throw new Error('Full-disk handling is not clean: ' + JSON.stringify(results));
+      } else if (phase === 'guest-disk-full') {
+        // Guest mode, 2-photo template: the disk fills up before the second photo. The guest must be told the round is incomplete, still be able to finish, and the next round must work.
+        stage = 'guest disk-full setup';
+        await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
+        const tpl = { id: 'qa-2', name: 'QA 2', count: 2, title: 'QA', footer: 'KOKO STUDIO', background: '#171714', frame: '#d6b36a', showDate: true, logo: '', overlay: '', videoOverlay: '', textLayers: [], videoTextLayers: [], imageLayers: [], videoImageLayers: [] };
+        await evaluate(win, `(() => { localStorage.setItem('koko.saved-templates.v1', JSON.stringify([${JSON.stringify(tpl)}])); localStorage.setItem('koko.guest-template.v1', 'qa-2'); })()`);
+        await win.loadFile(html, { query: { camera: 'simulated' } });
+        await wait(1000);
+        if (!(await evaluate(win, `Boolean(document.querySelector('.guest-capture'))`))) {
+          await evaluate(win, `document.querySelector('.brand-button').click()`);
+          await waitFor(win, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Start Guest mode')`, 'dashboard', 8000);
+          await clickButton(win, 'button', 'Start Guest mode');
+          await clickButton(win, 'button', 'Stay in Photobooth');
+        }
+        await waitFor(win, `Boolean(document.querySelector('.guest-capture'))`, 'guest mode', 10000);
+        await evaluate(win, `(() => { const b = document.querySelector('.guest-exit-backdrop button'); if (b) b.click(); })()`);
+        const readyJs = `Boolean(document.querySelector('.guest-capture .capture-disc') && !document.querySelector('.guest-capture .capture-disc').disabled)`;
+        const results = [];
+        for (const [w, h] of [[1280, 720], [800, 1280]]) {
+          stage = `guest disk-full ${w}x${h}`;
+          win.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: w, height: h }, viewPosition: { x: 0, y: 0 }, viewSize: { width: w, height: h }, deviceScaleFactor: 1, scale: 1 });
+          await wait(900);
+          await waitFor(win, readyJs, 'ready', 20000);
+          // Round A: the second photo cannot be saved.
+          fdWrites = 0; failMode = 'bytes'; fullAfter = 1;
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'review of incomplete round', 60000);
+          await wait(1000);
+          fullAfter = Infinity;
+          const warn = await evaluate(win, `({ warning: Boolean(document.querySelector('.guest-capture .guest-review-warning')), innerHeight, overflowX: document.documentElement.scrollWidth > innerWidth, thumbs: document.querySelectorAll('.guest-capture .guest-round-photo').length, buttons: Array.from(document.querySelectorAll('.guest-capture .review-actions button')).map(b => Math.round(b.getBoundingClientRect().bottom)) })`);
+          await shot(win, `guest-disk-full-${w}x${h}-review`);
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, readyJs, 'ready after incomplete round', 20000);
+          await wait(500);
+          const incomplete = (await evaluate(win, `window.koko.listCaptureSessions(5, 0)`))[0];
+          const noWarningAfter = !(await evaluate(win, `Boolean(document.querySelector('.guest-capture .guest-review-warning'))`));
+          // Round B: space is back, the round is complete and shows no warning.
+          await evaluate(win, `document.querySelector('.guest-capture .capture-disc').click()`);
+          await waitFor(win, `document.querySelectorAll('.guest-capture .review-actions button').length >= 2`, 'review of full round', 60000);
+          await wait(1000);
+          const full = await evaluate(win, `({ warning: Boolean(document.querySelector('.guest-capture .guest-review-warning')), thumbs: document.querySelectorAll('.guest-capture .guest-round-photo').length, composition: Boolean(document.querySelector('.guest-capture .guest-composition img')) })`);
+          await evaluate(win, `(() => { const bs = document.querySelectorAll('.guest-capture .review-actions button'); bs[bs.length - 1].click(); })()`);
+          await waitFor(win, readyJs, 'ready after full round', 20000);
+          const entry = { size: `${w}x${h}`, warn, incompleteStatus: incomplete?.status, incompletePhotos: incomplete?.photoIds.length, noWarningAfter, full,
+            ok: warn.warning && warn.thumbs === 1 && !warn.overflowX && warn.buttons.every(b => b <= h) && incomplete?.status === 'confirmed' && incomplete.photoIds.length === 1 && noWarningAfter && !full.warning && full.thumbs === 2 && full.composition };
+          results.push(entry); step(`guest-disk-full-${w}x${h}`, entry);
+        }
+        win.webContents.disableDeviceEmulation();
+        await evaluate(win, `localStorage.removeItem('koko.saved-templates.v1'); localStorage.removeItem('koko.guest-template.v1')`);
+        report.allOk = results.every(r => r.ok);
+        if (!report.allOk) throw new Error('Guest full-disk round failed: ' + JSON.stringify(results.filter(r => !r.ok)));
       } else if (phase === 'rounds') {
         const rounds = Number(process.env.KOKO_QA_ROUNDS || 100);
         const hasText = text => `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === ${JSON.stringify(text)})`;
@@ -517,5 +568,5 @@ function finish(code) {
   console.log(JSON.stringify(report, null, 2));
   app.exit(code);
 }
-setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full"].includes(phase) ? 900000 : 90000).unref();
+setTimeout(() => { report.failure = `Timed out at ${stage}`; finish(1); }, ["rounds", "guest-multi", "video", "guest-video", "after-kill", "disk-full", "guest-disk-full"].includes(phase) ? 900000 : 90000).unref();
 require(path.join(archive, '.vite', 'build', 'main.cjs'));

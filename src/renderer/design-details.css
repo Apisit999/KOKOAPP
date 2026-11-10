@@ -275,6 +275,8 @@ body { color: var(--text); font-weight: var(--font-regular); line-height: 1.6 }
 .guest-camera-panel.guest-reviewing .review-feedback { position: sticky; bottom: 0; z-index: 3; background: var(--panel); box-shadow: 0 -10px 18px rgba(0,0,0,.55) }
 .guest-composition img { max-height: 34vh }
 
+.guest-camera-panel.guest-reviewing .guest-review-warning { flex-basis: 100%; order: 3; padding: 10px 14px; border: 1px solid rgba(240,160,120,.5); border-radius: 10px; background: rgba(240,160,120,.1); color: #ffd9c4; font-size: var(--fs-xl) }
+
 /* Preset chips at the top of the template editor. */
 .template-presets { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0 }
 .template-presets legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-base); font-weight: 600 }
