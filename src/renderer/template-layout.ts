@@ -19,6 +19,18 @@ export function defaultPhotoSlots(count: TemplateCount, title: string, logo: str
   const side = 82 * unit;
   const areaWidth = width - side * 2;
   const areaHeight = height - top - footerHeight - side;
+  // Three photos on a landscape sheet: one large photo on the left, two stacked on the right. Landscape camera pictures fit these
+  // openings far better than three tall, narrow columns.
+  if (info.flow === 'landscape' && count === 3) {
+    const leftWidth = (areaWidth - gap) * 0.64;
+    const rightWidth = areaWidth - gap - leftWidth;
+    const smallHeight = (areaHeight - gap) / 2;
+    return [
+      { x: side, y: top, width: leftWidth, height: areaHeight },
+      { x: side + leftWidth + gap, y: top, width: rightWidth, height: smallHeight },
+      { x: side + leftWidth + gap, y: top + smallHeight + gap, width: rightWidth, height: smallHeight }
+    ].map(box => ({ x: box.x / width * 100, y: box.y / height * 100, width: box.width / width * 100, height: box.height / height * 100 }));
+  }
   const { columns, rows } = slotGrid(count, info.flow);
   const boxWidth = (areaWidth - gap * (columns - 1)) / columns;
   const boxHeight = (areaHeight - gap * (rows - 1)) / rows;

@@ -25,7 +25,7 @@ export const TEMPLATE_SIZES: readonly TemplateSizeInfo[] = [
   { id: 'postcard', width: 1200, height: () => 1800, counts: [1, 2, 3, 4], flow: 'portrait', ratio: '2:3',
     th: 'โปสการ์ดแนวตั้ง 4×6 นิ้ว', en: 'Portrait postcard 4×6 in', hintTh: 'ขนาดภาพพิมพ์มาตรฐาน', hintEn: 'The standard photo print size.' },
   { id: 'landscape', width: 1800, height: () => 1200, counts: [1, 2, 3, 4], flow: 'landscape', ratio: '3:2',
-    th: 'โปสการ์ดแนวนอน 6×4 นิ้ว', en: 'Landscape postcard 6×4 in', hintTh: 'เหมาะกับภาพหมู่หรือเรียงรูปเป็นแถวนอน', hintEn: 'Good for group shots or a row of photos.' },
+    th: 'โปสการ์ดแนวนอน 6×4 นิ้ว', en: 'Landscape postcard 6×4 in', hintTh: 'เหมาะกับภาพหมู่ 3 รูปจัดเป็นภาพใหญ่ 1 ภาพกับภาพเล็ก 2 ภาพ', hintEn: 'Good for group shots; three photos make one large and two small.' },
   { id: 'square', width: 1200, height: () => 1200, counts: [1, 2, 4], flow: 'portrait', ratio: '1:1',
     th: 'จัตุรัส', en: 'Square', hintTh: 'เหมาะกับโซเชียลมีเดีย', hintEn: 'Suits social media.' },
   { id: 'story', width: 1080, height: () => 1920, counts: [1, 2, 3], flow: 'portrait', ratio: '9:16',

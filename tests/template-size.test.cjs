@@ -86,12 +86,18 @@ test('strips stack photos top to bottom with usable, evenly sized openings', () 
   assert.ok(four.every(slot => Math.abs(slot.x - four[0].x) < 1e-9));
 });
 
-test('landscape sizes run photos in a row and four photos make a grid', () => {
-  assert.deepEqual(slotGrid(3, 'landscape'), { columns: 3, rows: 1 });
+test('landscape sizes put two photos side by side, three as one large plus two small, and four in a grid', () => {
   assert.deepEqual(slotGrid(2, 'landscape'), { columns: 2, rows: 1 });
   assert.deepEqual(slotGrid(4, 'landscape'), { columns: 2, rows: 2 });
   assert.deepEqual(slotGrid(4, 'portrait'), { columns: 2, rows: 2 });
-  const row = defaultPhotoSlots(3, '', '', '', false, 'landscape');
-  assert.ok(row[0].x < row[1].x && row[1].x < row[2].x);
-  assert.ok(row.every(slot => Math.abs(slot.y - row[0].y) < 1e-9));
+  const { width, height } = canvasSize('landscape', 3);
+  const [big, topRight, bottomRight] = defaultPhotoSlots(3, '', '', '', false, 'landscape');
+  assert.ok(big.x < topRight.x && Math.abs(topRight.x - bottomRight.x) < 1e-9);
+  assert.ok(topRight.y < bottomRight.y && Math.abs(big.y - topRight.y) < 1e-9);
+  assert.ok(big.width > topRight.width && big.height > topRight.height);
+  // Large photo and small photos are close to a landscape camera picture's shape, not tall slivers.
+  const aspect = slot => (slot.width / 100 * width) / (slot.height / 100 * height);
+  assert.ok(aspect(big) > 1.0 && aspect(big) < 1.9, `large ${aspect(big)}`);
+  assert.ok(aspect(topRight) > 1.0 && aspect(topRight) < 2.2, `small ${aspect(topRight)}`);
+  assert.ok(Math.abs(aspect(topRight) - aspect(bottomRight)) < 1e-9);
 });
