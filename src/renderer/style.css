@@ -794,3 +794,8 @@ button { -webkit-tap-highlight-color: transparent }
 .event-summary div { display:flex; justify-content:space-between; gap:12px; font-size:var(--fs-md) }
 .event-summary dt { opacity:.7 }
 .event-summary dd { margin:0; text-align:right; font-weight:600 }
+
+.print-sheet-preview{display:grid;gap:6px;justify-items:start;margin:8px 0}
+.print-sheet-frame{position:relative;max-width:100%;line-height:0;border:1px solid #888;background:#fff}
+.print-sheet-frame img{max-width:320px;max-height:240px;width:auto;height:auto}
+.print-cut-line{position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed #e0245e}

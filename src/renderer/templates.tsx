@@ -149,6 +149,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
   const [paper, setPaper] = useState<PrintOptionsSnapshot['paper']>('A4');
   const [landscape, setLandscape] = useState(false);
   const [stripTwoUp, setStripTwoUp] = useState(true);
+  const [sheetPreview, setSheetPreview] = useState<string | null>(null);
   const [copies, setCopies] = useState(1);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const slotEditorRef = useRef<HTMLDivElement>(null);
@@ -440,21 +441,30 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     } catch (error) { onMessage(error instanceof Error ? error.message : 'Could not export this image.'); }
     finally { setBusy(false); }
   }
+  async function buildPrintable() {
+    const output = document.createElement('canvas');
+    await drawComposition(output, available, template, th);
+    // A 2x6 strip is printed twice side by side on one sheet (a 4x6 sheet cut in half gives two strips).
+    if (template.size !== 'strip' || !stripTwoUp) return output;
+    const printable = document.createElement('canvas');
+    printable.width = output.width * 2; printable.height = output.height;
+    const sheet = printable.getContext('2d');
+    if (!sheet) throw new Error('Could not create the print sheet.');
+    sheet.drawImage(output, 0, 0); sheet.drawImage(output, output.width, 0);
+    return printable;
+  }
+  async function previewSheet() {
+    if (!complete || busy) return;
+    setBusy(true);
+    try { setSheetPreview((await buildPrintable()).toDataURL('image/png')); }
+    catch (error) { onMessage(error instanceof Error ? error.message : 'Could not create the preview.'); }
+    finally { setBusy(false); }
+  }
   async function printImage() {
     if (!complete || busy) return;
     setBusy(true);
     try {
-      const output = document.createElement('canvas');
-      await drawComposition(output, available, template, th);
-      // A 2x6 strip is printed twice side by side on one sheet (a 4x6 sheet cut in half gives two strips).
-      let printable = output;
-      if (template.size === 'strip' && stripTwoUp) {
-        printable = document.createElement('canvas');
-        printable.width = output.width * 2; printable.height = output.height;
-        const sheet = printable.getContext('2d');
-        if (!sheet) throw new Error('Could not create the print sheet.');
-        sheet.drawImage(output, 0, 0); sheet.drawImage(output, output.width, 0);
-      }
+      const printable = await buildPrintable();
       const blob = await new Promise<Blob>((resolve, reject) => printable.toBlob(value => value ? resolve(value) : reject(new Error('Could not create print image.')), 'image/png'));
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const job = await window.koko.submitPrintImage(bytes, { printerName, paper, landscape, copies });
@@ -470,7 +480,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     <p className="lead">{th ? 'เลือกภาพจากคลัง จัดวาง และส่งออกเป็นภาพ PNG ได้ทันที' : 'Choose photos from your library, arrange them, and export a finished PNG.'}{printEnabled ? (th ? ' หรือเปิดกล่องพิมพ์ของระบบ' : ' or open your system print dialog.') : ''}</p>
     <div className="template-layout">
       <section className="template-controls">
-        {printEnabled && <><fieldset className="print-options"><legend>{th ? 'ตัวเลือกพิมพ์' : 'Print options'}</legend>{template.size === 'strip' && <label className="print-two-up"><input type="checkbox" checked={stripTwoUp} onChange={event => setStripTwoUp(event.target.checked)} /> {th ? 'พิมพ์ 2 แถบต่อแผ่น (เลือกกระดาษ 4×6 แล้วตัดครึ่ง)' : 'Print 2 strips per sheet (use 4×6 paper, cut in half)'}</label>}<label>{th ? 'เครื่องพิมพ์' : 'Printer'}<select value={printerName} onChange={event => setPrinterName(event.target.value)}><option value="">{th ? 'เลือกในกล่องพิมพ์ของระบบ' : 'Choose in system print dialog'}</option><option value="__koko_simulated_printer__">{th ? 'จำลองการพิมพ์ (ไม่ใช้เครื่องจริง)' : 'Simulate print (no printer needed)'}</option>{printers.map(printer => <option key={printer.name} value={printer.name}>{printer.displayName || printer.name}</option>)}</select></label><label>{th ? 'กระดาษ' : 'Paper'}<select value={paper} onChange={event => setPaper(event.target.value as PrintOptionsSnapshot['paper'])}><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option><option value="4x6">4 × 6 in</option></select></label><label className="switch"><span>{th ? 'แนวนอน' : 'Landscape'}</span><input type="checkbox" checked={landscape} onChange={event => setLandscape(event.target.checked)} /></label><label>{th ? 'จำนวนสำเนา' : 'Copies'}<input type="number" min={1} max={10} value={copies} onChange={event => setCopies(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} /></label><button className="camera-secondary" type="button" onClick={() => void window.koko.listPrintPrinters().then(setPrinters).catch(error => onMessage(error instanceof Error ? error.message : 'Printer scan failed.'))}>{th ? 'ค้นหาเครื่องพิมพ์' : 'Refresh printers'}</button></fieldset><section className="print-job-list"><strong>{th ? 'คิวและประวัติพิมพ์' : 'Print queue and history'}</strong>{printJobs.length ? printJobs.map(job => <div key={job.id} className="print-job-row"><span>{job.options.printerName || (th ? 'กล่องพิมพ์ระบบ' : 'System dialog')} · {job.options.paper} · {job.options.copies}× · {job.status}{job.error ? ` · ${job.error}` : ''}</span>{job.status === 'failed' && <button type="button" className="text-link" onClick={() => void window.koko.retryPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ลองใหม่' : 'Retry'}</button>}{job.status === 'pending' && <button type="button" className="text-link" onClick={() => void window.koko.cancelPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>) : <p className="muted">{th ? 'ยังไม่มีงานพิมพ์' : 'No print jobs yet.'}</p>}<small>{th ? 'สถานะส่งแล้วหมายถึง Windows รับงานเข้าคิว ไม่ได้ยืนยันผลพิมพ์จริง' : 'Submitted means Windows accepted the job; it does not confirm paper output.'}</small></section></>}
+        {printEnabled && <><fieldset className="print-options"><legend>{th ? 'ตัวเลือกพิมพ์' : 'Print options'}</legend>{template.size === 'strip' && <label className="print-two-up"><input type="checkbox" checked={stripTwoUp} onChange={event => setStripTwoUp(event.target.checked)} /> {th ? 'พิมพ์ 2 แถบต่อแผ่น (เลือกกระดาษ 4×6 แล้วตัดครึ่ง)' : 'Print 2 strips per sheet (use 4×6 paper, cut in half)'}</label>}<label>{th ? 'เครื่องพิมพ์' : 'Printer'}<select value={printerName} onChange={event => setPrinterName(event.target.value)}><option value="">{th ? 'เลือกในกล่องพิมพ์ของระบบ' : 'Choose in system print dialog'}</option><option value="__koko_simulated_printer__">{th ? 'จำลองการพิมพ์ (ไม่ใช้เครื่องจริง)' : 'Simulate print (no printer needed)'}</option>{printers.map(printer => <option key={printer.name} value={printer.name}>{printer.displayName || printer.name}</option>)}</select></label><label>{th ? 'กระดาษ' : 'Paper'}<select value={paper} onChange={event => setPaper(event.target.value as PrintOptionsSnapshot['paper'])}><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option><option value="4x6">4 × 6 in</option></select></label><label className="switch"><span>{th ? 'แนวนอน' : 'Landscape'}</span><input type="checkbox" checked={landscape} onChange={event => setLandscape(event.target.checked)} /></label><label>{th ? 'จำนวนสำเนา' : 'Copies'}<input type="number" min={1} max={10} value={copies} onChange={event => setCopies(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} /></label><button className="camera-secondary" type="button" disabled={!complete || busy} onClick={() => void previewSheet()}>{th ? 'ดูตัวอย่างแผ่นพิมพ์' : 'Preview print sheet'}</button>{sheetPreview && <div className="print-sheet-preview" role="dialog" aria-label={th ? 'ตัวอย่างแผ่นพิมพ์' : 'Print sheet preview'}><div className="print-sheet-frame"><img src={sheetPreview} alt="" />{template.size === 'strip' && stripTwoUp && <span className="print-cut-line" aria-hidden="true" />}</div><small>{template.size === 'strip' && stripTwoUp ? (th ? 'เส้นประคือจุดตัดครึ่งแผ่น' : 'Dashed line = where to cut the sheet') : (th ? 'ภาพที่จะพิมพ์' : 'What will be printed')}</small><button type="button" className="text-link" onClick={() => setSheetPreview(null)}>{th ? 'ปิดตัวอย่าง' : 'Close preview'}</button></div>}<button className="camera-secondary" type="button" onClick={() => void window.koko.listPrintPrinters().then(setPrinters).catch(error => onMessage(error instanceof Error ? error.message : 'Printer scan failed.'))}>{th ? 'ค้นหาเครื่องพิมพ์' : 'Refresh printers'}</button></fieldset><section className="print-job-list"><strong>{th ? 'คิวและประวัติพิมพ์' : 'Print queue and history'}</strong>{printJobs.length ? printJobs.map(job => <div key={job.id} className="print-job-row"><span>{job.options.printerName || (th ? 'กล่องพิมพ์ระบบ' : 'System dialog')} · {job.options.paper} · {job.options.copies}× · {job.status}{job.error ? ` · ${job.error}` : ''}</span>{job.status === 'failed' && <button type="button" className="text-link" onClick={() => void window.koko.retryPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ลองใหม่' : 'Retry'}</button>}{job.status === 'pending' && <button type="button" className="text-link" onClick={() => void window.koko.cancelPrintJob(job.id).then(updated => updated && setPrintJobs(current => current.map(item => item.id === updated.id ? updated : item)))}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>) : <p className="muted">{th ? 'ยังไม่มีงานพิมพ์' : 'No print jobs yet.'}</p>}<small>{th ? 'สถานะส่งแล้วหมายถึง Windows รับงานเข้าคิว ไม่ได้ยืนยันผลพิมพ์จริง' : 'Submitted means Windows accepted the job; it does not confirm paper output.'}</small></section></>}
         <fieldset className="template-presets"><legend>{th ? 'เริ่มจากแบบสำเร็จรูป' : 'Start from a preset'}</legend><div className="template-preset-grid">{TEMPLATE_PRESETS.map(preset => <button type="button" key={preset.id} onClick={() => setTemplate(current => applyTemplatePreset(current, preset, th ? 'th' : 'en'))}><strong>{preset.name[th ? 'th' : 'en']}</strong><small>{preset.count} {th ? 'ภาพ' : preset.count === 1 ? 'photo' : 'photos'}</small></button>)}</div><small className="muted">{th ? 'ปรับข้อความ สี โลโก้ และกรอบต่อได้ทุกส่วน' : 'You can still edit the text, colours, logo and frame afterwards.'}</small></fieldset>
         <label className="template-field">{th ? 'ชื่อเทมเพลต' : 'Template name'}<input value={template.name} maxLength={60} onChange={event => update('name', event.target.value)} placeholder={th ? 'เช่น งานวันเกิด' : 'e.g. Birthday'} /></label>
         <div className="template-field"><span>{th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}</span><div className="template-options" role="group" aria-label={th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}>{(['photo', 'video'] as const).map(mode => <button type="button" key={mode} className={(template.mediaMode ?? 'photo') === mode ? 'selected' : ''} aria-pressed={(template.mediaMode ?? 'photo') === mode} onClick={() => setTemplate(current => ({ ...current, mediaMode: mode === 'video' ? 'video' : undefined }))}>{mode === 'photo' ? (th ? 'ภาพถ่าย' : 'Photos') : (th ? 'วิดีโอ' : 'Video clip')}</button>)}</div></div>
