@@ -26,6 +26,7 @@ type Template = {
   videoFrame?: PhotoSlot;
   videoAspect?: number;
   mediaMode?: 'photo' | 'video';
+  videoSeconds?: number;
   textLayers?: CaptureTextLayer[];
   videoTextLayers?: CaptureTextLayer[];
   imageLayers?: CaptureImageLayer[];
@@ -56,7 +57,7 @@ function loadTemplates(): Template[] {
       && typeof item.footer === 'string' && typeof item.background === 'string'
       && typeof item.frame === 'string' && typeof item.showDate === 'boolean'
       && typeof item.logo === 'string'))
-      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, size: isTemplateSize(item.size) ? item.size : undefined, fontId: typeof item.fontId === 'string' && /^[0-9a-f]{32}$/.test(item.fontId) ? item.fontId : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
+      .map(item => ({ ...item, overlay: typeof item.overlay === 'string' ? item.overlay : '', videoOverlay: typeof item.videoOverlay === 'string' ? item.videoOverlay : '', mediaMode: item.mediaMode === 'video' ? 'video' as const : undefined, videoSeconds: item.mediaMode === 'video' && [5, 15, 20].includes(item.videoSeconds as number) ? item.videoSeconds as number : undefined, size: isTemplateSize(item.size) ? item.size : undefined, fontId: typeof item.fontId === 'string' && /^[0-9a-f]{32}$/.test(item.fontId) ? item.fontId : undefined, slots: Array.isArray(item.slots) && item.slots.length === item.count && item.slots.every(isValidPhotoSlot) ? item.slots : undefined, videoFrame: isValidPhotoSlot(item.videoFrame) ? item.videoFrame : { x: 0, y: 0, width: 100, height: 100 }, videoAspect: typeof item.videoAspect === 'number' && item.videoAspect >= 0.2 && item.videoAspect <= 5 ? item.videoAspect : undefined, textLayers: Array.isArray(item.textLayers) && item.textLayers.length <= 6 && item.textLayers.every(validTextLayer) ? item.textLayers : [], videoTextLayers: Array.isArray(item.videoTextLayers) && item.videoTextLayers.length <= 6 && item.videoTextLayers.every(validTextLayer) ? item.videoTextLayers : [], imageLayers: Array.isArray(item.imageLayers) && item.imageLayers.length <= MAX_STICKER_LAYERS && item.imageLayers.every(validImageLayer) ? item.imageLayers : [], videoImageLayers: Array.isArray(item.videoImageLayers) && item.videoImageLayers.length <= MAX_STICKER_LAYERS && item.videoImageLayers.every(validImageLayer) ? item.videoImageLayers : [] }));
   } catch { return []; }
 }
 
@@ -337,24 +338,24 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
     reader.onerror = () => onMessage(th ? 'อ่านไฟล์โลโก้ไม่ได้' : 'Could not read the logo file.');
     reader.readAsDataURL(file);
   }
-  async function uploadDesign(file?: File) {
-    if (!file) return;
-    if (file.type !== 'image/png' || file.size > 8_000_000) {
-      onMessage(th ? 'เลือกไฟล์ PNG ที่เจาะช่องใส่รูปให้โปร่งใส ขนาดไม่เกิน 8 MB' : 'Choose a PNG design with transparent photo windows, up to 8 MB.'); return;
-    }
-    try {
-      const bitmap = await createImageBitmap(file);
-      try {
-        const scale = Math.min(1, 400 / Math.max(bitmap.width, bitmap.height));
-        const probe = document.createElement('canvas');
-        probe.width = Math.max(8, Math.round(bitmap.width * scale)); probe.height = Math.max(8, Math.round(bitmap.height * scale));
-        const probeContext = probe.getContext('2d', { willReadFrequently: true });
-        if (!probeContext) throw new Error('canvas unavailable');
-        probeContext.drawImage(bitmap, 0, 0, probe.width, probe.height);
-        const openings = detectOpenings(probeContext.getImageData(0, 0, probe.width, probe.height));
-        if (!openings.length) {
-          onMessage(th ? 'ไม่พบช่องใส่รูปในไฟล์นี้ ให้เจาะช่องรูปเป็นพื้นหลังโปร่งใสในโปรแกรมออกแบบ (Canva: ส่งออกเป็น PNG พื้นหลังโปร่งใส) แล้วลองใหม่' : 'No transparent photo windows were found. Cut the photo areas out as transparent in your design tool (in Canva, export as PNG with a transparent background) and try again.'); return;
-        }
+  async function uploadDesign(file?: File) {
+    if (!file) return;
+    if (file.type !== 'image/png' || file.size > 8_000_000) {
+      onMessage(th ? 'เลือกไฟล์ PNG ที่เจาะช่องใส่รูปให้โปร่งใส ขนาดไม่เกิน 8 MB' : 'Choose a PNG design with transparent photo windows, up to 8 MB.'); return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const scale = Math.min(1, 400 / Math.max(bitmap.width, bitmap.height));
+        const probe = document.createElement('canvas');
+        probe.width = Math.max(8, Math.round(bitmap.width * scale)); probe.height = Math.max(8, Math.round(bitmap.height * scale));
+        const probeContext = probe.getContext('2d', { willReadFrequently: true });
+        if (!probeContext) throw new Error('canvas unavailable');
+        probeContext.drawImage(bitmap, 0, 0, probe.width, probe.height);
+        const openings = detectOpenings(probeContext.getImageData(0, 0, probe.width, probe.height));
+        if (!openings.length) {
+          onMessage(th ? 'ไม่พบช่องใส่รูปในไฟล์นี้ ให้เจาะช่องรูปเป็นพื้นหลังโปร่งใสในโปรแกรมออกแบบ (Canva: ส่งออกเป็น PNG พื้นหลังโปร่งใส) แล้วลองใหม่' : 'No transparent photo windows were found. Cut the photo areas out as transparent in your design tool (in Canva, export as PNG with a transparent background) and try again.'); return;
+        }
         if (!(SUPPORTED_OPENING_COUNTS as readonly number[]).includes(openings.length)) {
           onMessage(th ? `พบช่องใส่รูป ${openings.length} ช่อง แต่เทมเพลตรองรับ 1, 2, 3 หรือ 4 ช่อง` : `Found ${openings.length} photo windows, but templates support 1 to 4.`); return;
         }
@@ -365,26 +366,26 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
           onMessage(th ? `สัดส่วนไฟล์ ${bitmap.width} × ${bitmap.height} ไม่ตรงกับขนาดใดที่รองรับสำหรับ ${count} ช่อง ใช้สัดส่วนเหล่านี้: ${fitting}` : `A ${bitmap.width} × ${bitmap.height} design does not match a size that offers ${count} photo${count === 1 ? '' : 's'}. Use one of: ${fitting}.`); return;
         }
         const target = canvasSize(designSize, count);
-        const canvas = document.createElement('canvas');
-        canvas.width = target.width; canvas.height = target.height;
-        const context = canvas.getContext('2d', { willReadFrequently: true });
-        if (!context) throw new Error('canvas unavailable');
-        context.drawImage(bitmap, 0, 0, target.width, target.height);
-        let blob: Blob | null = null; let reduced = false;
-        for (const levels of [0, 64, 32, 16]) {
-          if (levels) { const pixels = context.getImageData(0, 0, target.width, target.height); posterize(pixels, levels); context.putImageData(pixels, 0, 0); reduced = true; }
-          blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-          if (blob && blob.size <= 500 * 1024) break;
-        }
-        if (!blob || blob.size > 500 * 1024) {
-          onMessage(th ? 'ไฟล์ดีไซน์ละเอียดเกินไปจนบีบให้ต่ำกว่า 500 KB ไม่ได้ ลองลดรายละเอียดหรือจำนวนสีของภาพ' : 'This design is too detailed to fit in 500 KB. Simplify the artwork or reduce its colours.'); return;
-        }
-        const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read')); reader.onerror = () => reject(new Error('read')); reader.readAsDataURL(blob as Blob); });
-        setTemplate(current => ({ ...current, count, size: designSize, overlay: dataUrl, slots: openings }));
-        setSelected([]);
-        onMessage(th ? `นำเข้าดีไซน์แล้ว ขนาด ${sizeInfo(designSize).th} พบช่องใส่รูป ${count} ช่อง${reduced ? ' (ลดจำนวนสีเพื่อให้ไฟล์เล็กลง)' : ''} ตรวจตำแหน่งช่องรูปด้านล่างได้` : `Design imported as ${sizeInfo(designSize).en}: ${count} photo window${count === 1 ? '' : 's'} found${reduced ? ' (colours reduced to fit the size limit)' : ''}. You can fine-tune the openings below.`);
-      } finally { bitmap.close(); }
-    } catch { onMessage(th ? 'ไฟล์ PNG นี้เปิดไม่ได้' : 'This PNG could not be opened.'); }
+        const canvas = document.createElement('canvas');
+        canvas.width = target.width; canvas.height = target.height;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) throw new Error('canvas unavailable');
+        context.drawImage(bitmap, 0, 0, target.width, target.height);
+        let blob: Blob | null = null; let reduced = false;
+        for (const levels of [0, 64, 32, 16]) {
+          if (levels) { const pixels = context.getImageData(0, 0, target.width, target.height); posterize(pixels, levels); context.putImageData(pixels, 0, 0); reduced = true; }
+          blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+          if (blob && blob.size <= 500 * 1024) break;
+        }
+        if (!blob || blob.size > 500 * 1024) {
+          onMessage(th ? 'ไฟล์ดีไซน์ละเอียดเกินไปจนบีบให้ต่ำกว่า 500 KB ไม่ได้ ลองลดรายละเอียดหรือจำนวนสีของภาพ' : 'This design is too detailed to fit in 500 KB. Simplify the artwork or reduce its colours.'); return;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read')); reader.onerror = () => reject(new Error('read')); reader.readAsDataURL(blob as Blob); });
+        setTemplate(current => ({ ...current, count, size: designSize, overlay: dataUrl, slots: openings }));
+        setSelected([]);
+        onMessage(th ? `นำเข้าดีไซน์แล้ว ขนาด ${sizeInfo(designSize).th} พบช่องใส่รูป ${count} ช่อง${reduced ? ' (ลดจำนวนสีเพื่อให้ไฟล์เล็กลง)' : ''} ตรวจตำแหน่งช่องรูปด้านล่างได้` : `Design imported as ${sizeInfo(designSize).en}: ${count} photo window${count === 1 ? '' : 's'} found${reduced ? ' (colours reduced to fit the size limit)' : ''}. You can fine-tune the openings below.`);
+      } finally { bitmap.close(); }
+    } catch { onMessage(th ? 'ไฟล์ PNG นี้เปิดไม่ได้' : 'This PNG could not be opened.'); }
   }
   async function uploadFrame(file?: File) {
     if (!file) return;
@@ -484,7 +485,7 @@ export function TemplatesPage({ photos, th, onMessage, printEnabled = false, onU
         <fieldset className="template-presets"><legend>{th ? 'เริ่มจากแบบสำเร็จรูป' : 'Start from a preset'}</legend><div className="template-preset-grid">{TEMPLATE_PRESETS.map(preset => <button type="button" key={preset.id} onClick={() => setTemplate(current => applyTemplatePreset(current, preset, th ? 'th' : 'en'))}><strong>{preset.name[th ? 'th' : 'en']}</strong><small>{preset.count} {th ? 'ภาพ' : preset.count === 1 ? 'photo' : 'photos'}</small></button>)}</div><small className="muted">{th ? 'ปรับข้อความ สี โลโก้ และกรอบต่อได้ทุกส่วน' : 'You can still edit the text, colours, logo and frame afterwards.'}</small></fieldset>
         <label className="template-field">{th ? 'ชื่อเทมเพลต' : 'Template name'}<input value={template.name} maxLength={60} onChange={event => update('name', event.target.value)} placeholder={th ? 'เช่น งานวันเกิด' : 'e.g. Birthday'} /></label>
         <div className="template-field"><span>{th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}</span><div className="template-options" role="group" aria-label={th ? 'ชนิดสื่อในโหมดแขก' : 'Guest captures'}>{(['photo', 'video'] as const).map(mode => <button type="button" key={mode} className={(template.mediaMode ?? 'photo') === mode ? 'selected' : ''} aria-pressed={(template.mediaMode ?? 'photo') === mode} onClick={() => setTemplate(current => ({ ...current, mediaMode: mode === 'video' ? 'video' : undefined }))}>{mode === 'photo' ? (th ? 'ภาพถ่าย' : 'Photos') : (th ? 'วิดีโอ' : 'Video clip')}</button>)}</div></div>
-        <div className="template-field"><span>{th ? 'ขนาดและรูปแบบ' : 'Size and shape'}</span><div className="template-size-grid" role="group" aria-label={th ? 'ขนาดและรูปแบบ' : 'Size and shape'}>{TEMPLATE_SIZES.map(info => <button type="button" key={info.id} className={(template.size ?? 'classic') === info.id ? 'selected' : ''} aria-pressed={(template.size ?? 'classic') === info.id} title={th ? info.hintTh : info.hintEn} onClick={() => { if ((template.size ?? 'classic') !== info.id) { setTemplate(current => ({ ...current, size: info.id === 'classic' ? undefined : info.id, count: countAfterSizeChange(info.id, current.count), overlay: '', slots: undefined })); setSelected([]); } }}><strong>{th ? info.th : info.en}</strong><small>{info.ratio}</small></button>)}</div><small className="muted">{th ? sizeInfo(template.size).hintTh : sizeInfo(template.size).hintEn} · {canvasSize(template.size, template.count).width} × {canvasSize(template.size, template.count).height} px</small></div>
+        {template.mediaMode === 'video' && <div className="template-field"><span>{th ? 'ความยาวคลิปของแขก' : 'Guest clip length'}</span><div className="template-options" role="group" aria-label={th ? 'ความยาวคลิปของแขก' : 'Guest clip length'}>{[5, 10, 15, 20].map(value => <button type="button" key={value} className={(template.videoSeconds ?? 10) === value ? 'selected' : ''} aria-pressed={(template.videoSeconds ?? 10) === value} onClick={() => setTemplate(current => ({ ...current, videoSeconds: value === 10 ? undefined : value }))}>{value}s</button>)}</div></div>}<div className="template-field"><span>{th ? 'ขนาดและรูปแบบ' : 'Size and shape'}</span><div className="template-size-grid" role="group" aria-label={th ? 'ขนาดและรูปแบบ' : 'Size and shape'}>{TEMPLATE_SIZES.map(info => <button type="button" key={info.id} className={(template.size ?? 'classic') === info.id ? 'selected' : ''} aria-pressed={(template.size ?? 'classic') === info.id} title={th ? info.hintTh : info.hintEn} onClick={() => { if ((template.size ?? 'classic') !== info.id) { setTemplate(current => ({ ...current, size: info.id === 'classic' ? undefined : info.id, count: countAfterSizeChange(info.id, current.count), overlay: '', slots: undefined })); setSelected([]); } }}><strong>{th ? info.th : info.en}</strong><small>{info.ratio}</small></button>)}</div><small className="muted">{th ? sizeInfo(template.size).hintTh : sizeInfo(template.size).hintEn} · {canvasSize(template.size, template.count).width} × {canvasSize(template.size, template.count).height} px</small></div>
         <div className="template-field"><span>{th ? 'จำนวนรูป' : 'Photos'}</span><div className="template-options">{allowedCounts(template.size).map(count => <button type="button" key={count} className={template.count === count ? 'selected' : ''} aria-pressed={template.count === count} onClick={() => { if (template.count !== count) setTemplate(current => ({ ...current, count, overlay: '', slots: undefined })); setSelected([]); }}>{count} {th ? 'ภาพ' : count === 1 ? 'photo' : 'photos'}</button>)}</div></div>
         <FontSelect label={th ? 'ฟอนต์หัวภาพและท้ายภาพ' : 'Title and footer font'} value={template.fontId} th={th} onMessage={onMessage} onChange={fontId => update('fontId', fontId)} />
         <label className="template-field">{th ? 'ข้อความหัวภาพ' : 'Title'}<input value={template.title} maxLength={60} onChange={event => update('title', event.target.value)} /></label>

@@ -6,7 +6,7 @@ import { MAX_STICKER_LAYERS, validImageLayer, validTextLayer } from './template-
 export type PortableTemplate = {
   id: string; name: string; count: TemplateCount; size?: TemplateSizeId; title: string; footer: string; fontId?: string;
   background: string; frame: string; showDate: boolean; logo: string; overlay: string;
-  videoOverlay: string; slots?: PhotoSlot[]; videoFrame?: PhotoSlot; videoAspect?: number; mediaMode?: 'photo' | 'video';
+  videoOverlay: string; slots?: PhotoSlot[]; videoFrame?: PhotoSlot; videoAspect?: number; mediaMode?: 'photo' | 'video'; videoSeconds?: number;
   textLayers?: CaptureTextLayer[]; videoTextLayers?: CaptureTextLayer[];
   imageLayers?: CaptureImageLayer[]; videoImageLayers?: CaptureImageLayer[];
 };
@@ -83,7 +83,7 @@ function validateTemplate(value: unknown): PortableTemplate {
   if (photoSlots && photoSlots.length !== item.count) throw new Error('Photo slot count must match the template photo count.');
   return { id: item.id as string, name: item.name as string, count: item.count as TemplateCount, size: item.size as TemplateSizeId | undefined, title: item.title as string, footer: item.footer as string, fontId: item.fontId as string | undefined,
     background: item.background as string, frame: item.frame as string, showDate: item.showDate, logo: item.logo as string, overlay: item.overlay as string, videoOverlay: item.videoOverlay as string,
-    slots: photoSlots, videoFrame: item.videoFrame as PhotoSlot | undefined, videoAspect: item.videoAspect as number | undefined, mediaMode: item.mediaMode === 'video' ? 'video' : undefined,
+    slots: photoSlots, videoFrame: item.videoFrame as PhotoSlot | undefined, videoAspect: item.videoAspect as number | undefined, mediaMode: item.mediaMode === 'video' ? 'video' : undefined, videoSeconds: item.mediaMode === 'video' && [5, 15, 20].includes(item.videoSeconds as number) ? item.videoSeconds as number : undefined,
     textLayers: layers('textLayers', 6, validTextLayer), videoTextLayers: layers('videoTextLayers', 6, validTextLayer),
     imageLayers: layers('imageLayers', MAX_STICKER_LAYERS, validImageLayer), videoImageLayers: layers('videoImageLayers', MAX_STICKER_LAYERS, validImageLayer) };
 }
