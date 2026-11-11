@@ -61,3 +61,14 @@ test('carries a template size and checks the photo count against it', () => {
   assert.throws(() => parseTemplateArchive(pack([{ ...strip, size: 'huge' }])), /invalid fields/);
   assert.equal(parseTemplateArchive(pack([template]))[0].size, undefined);
 });
+
+test('carries a colour filter and a guest clip length, and drops values that are not valid', () => {
+  const [kept] = parseTemplateArchive(exportTemplateArchive([{ ...template, filter: 'sepia', mediaMode: 'video', videoSeconds: 20 }]));
+  assert.equal(kept.filter, 'sepia'); assert.equal(kept.videoSeconds, 20);
+  const [bad] = parseTemplateArchive(pack([{ ...template, filter: 'neon', mediaMode: 'video', videoSeconds: 99 }]));
+  assert.equal(bad.filter, undefined); assert.equal(bad.videoSeconds, undefined);
+  const [photo] = parseTemplateArchive(pack([{ ...template, videoSeconds: 15 }]));
+  assert.equal(photo.videoSeconds, undefined);
+  const [plain] = parseTemplateArchive(exportTemplateArchive([template]));
+  assert.equal(plain.filter, undefined);
+});
