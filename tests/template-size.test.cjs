@@ -20,7 +20,10 @@ test('each size has the canvas and photo counts the booth needs, led by the vert
   assert.deepEqual(canvasSize('story', 3), { width: 1080, height: 1920 });
   assert.deepEqual(canvasSize('photo5x7', 1), { width: 1200, height: 1680 });
   assert.equal(TEMPLATE_SIZES[0].id, 'strip');
-  assert.deepEqual(allowedCounts('strip'), [2, 3, 4]);
+  assert.deepEqual(canvasSize('a4', 1), { width: 2100, height: 2970 });
+  assert.deepEqual(canvasSize('a5', 2), { width: 1480, height: 2100 });
+  assert.deepEqual(allowedCounts('strip'), [2, 3, 4, 6]);
+  assert.equal(countAllowed('strip', 6), true); assert.equal(countAllowed('postcard', 6), false);
   assert.deepEqual(allowedCounts('classic'), [1, 2, 4]);
   assert.equal(countAllowed('strip', 3), true); assert.equal(countAllowed('strip', 1), false); assert.equal(countAllowed('classic', 3), false); assert.equal(countAllowed('square', 5), false);
   assert.equal(countAfterSizeChange('strip', 1), 3); assert.equal(countAfterSizeChange('strip', 4), 3); assert.equal(countAfterSizeChange('postcard', 4), 4); assert.equal(countAfterSizeChange('square', 3), 1); assert.equal(countAfterSizeChange('story', 4), 1);

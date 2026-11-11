@@ -1,8 +1,8 @@
 // Print/canvas sizes a template can use. A template without a size is a "classic" template (the original three layouts), so every
 // template saved before sizes existed keeps exactly the same canvas.
 
-export type TemplateSizeId = 'classic' | 'strip' | 'postcard' | 'landscape' | 'square' | 'story' | 'photo5x7';
-export type TemplateCount = 1 | 2 | 3 | 4;
+export type TemplateSizeId = 'classic' | 'strip' | 'postcard' | 'landscape' | 'square' | 'story' | 'photo5x7' | 'a5' | 'a4';
+export type TemplateCount = 1 | 2 | 3 | 4 | 6;
 
 export type TemplateSizeInfo = {
   id: TemplateSizeId;
@@ -20,7 +20,7 @@ export type TemplateSizeInfo = {
 };
 
 export const TEMPLATE_SIZES: readonly TemplateSizeInfo[] = [
-  { id: 'strip', width: 1200, height: () => 3600, counts: [3, 4, 2], startCount: 3, flow: 'strip', ratio: '1:3',
+  { id: 'strip', width: 1200, height: () => 3600, counts: [3, 4, 2, 6], startCount: 3, flow: 'strip', ratio: '1:3',
     th: 'แถบรูปแนวตั้ง 2×6 นิ้ว', en: 'Vertical photo strip 2×6 in', hintTh: 'แบบที่นิยมที่สุด เรียงรูปบนลงล่าง พิมพ์ 2 แถบต่อแผ่น 4×6 แล้วตัดครึ่ง', hintEn: 'The classic booth strip, photos stacked top to bottom. Prints twice on a 4×6 sheet to cut in half.' },
   { id: 'postcard', width: 1200, height: () => 1800, counts: [1, 2, 3, 4], flow: 'portrait', ratio: '2:3',
     th: 'โปสการ์ดแนวตั้ง 4×6 นิ้ว', en: 'Portrait postcard 4×6 in', hintTh: 'ขนาดภาพพิมพ์มาตรฐาน', hintEn: 'The standard photo print size.' },
@@ -32,13 +32,17 @@ export const TEMPLATE_SIZES: readonly TemplateSizeInfo[] = [
     th: 'สตอรี่ 9:16', en: 'Story 9:16', hintTh: 'เต็มจอมือถือแนวตั้ง', hintEn: 'Fills a vertical phone screen.' },
   { id: 'photo5x7', width: 1200, height: () => 1680, counts: [1, 2, 4], flow: 'portrait', ratio: '5:7',
     th: 'ภาพ 5×7 นิ้ว', en: 'Photo 5×7 in', hintTh: 'ขนาดภาพถ่ายใหญ่ขึ้น', hintEn: 'A larger photo print.' },
+  { id: 'a5', width: 1480, height: () => 2100, counts: [1, 2, 3, 4], flow: 'portrait', ratio: '1:1.41',
+    th: 'A5 แนวตั้ง', en: 'A5 portrait', hintTh: 'กระดาษ A5 148×210 มม.', hintEn: 'A5 paper, 148×210 mm.' },
+  { id: 'a4', width: 2100, height: () => 2970, counts: [1, 2, 3, 4], flow: 'portrait', ratio: '1:1.41',
+    th: 'A4 แนวตั้ง', en: 'A4 portrait', hintTh: 'กระดาษ A4 210×297 มม.', hintEn: 'A4 paper, 210×297 mm.' },
   { id: 'classic', width: 1200, height: count => count === 1 ? 1500 : count === 2 ? 1800 : 1600, counts: [1, 2, 4], flow: 'portrait', ratio: '4:5 · 2:3 · 3:4',
     th: 'แบบเดิม', en: 'Original', hintTh: 'ขนาดของเทมเพลตรุ่นก่อนหน้า (1 รูป 1200×1500, 2 รูป 1200×1800, 4 รูป 1200×1600)', hintEn: 'The size earlier templates used (1 photo 1200×1500, 2 photos 1200×1800, 4 photos 1200×1600).' }
 ];
 
 export const TEMPLATE_SIZE_IDS: readonly TemplateSizeId[] = TEMPLATE_SIZES.map(item => item.id);
 export const isTemplateSize = (value: unknown): value is TemplateSizeId => typeof value === 'string' && (TEMPLATE_SIZE_IDS as readonly string[]).includes(value);
-export const isTemplateCount = (value: unknown): value is TemplateCount => value === 1 || value === 2 || value === 3 || value === 4;
+export const isTemplateCount = (value: unknown): value is TemplateCount => value === 1 || value === 2 || value === 3 || value === 4 || value === 6;
 
 export function sizeInfo(size: TemplateSizeId | undefined | null): TemplateSizeInfo {
   return TEMPLATE_SIZES.find(item => item.id === size) ?? TEMPLATE_SIZES[TEMPLATE_SIZES.length - 1];
