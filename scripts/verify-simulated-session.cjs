@@ -860,7 +860,7 @@ app.on('browser-window-created', (_event, win) => {
         const stripNote = await evaluate(win, `Array.from(document.querySelectorAll('.template-field > small.muted')).map(x => x.textContent).find(t => t.includes('3600')) || ''`);
         const presetStrip = await evaluate(win, `Array.from(document.querySelectorAll('.template-preset-grid button')).some(b => /Photo strip · 3 photos/.test(b.textContent))`);
         step('sizes-editor', { sizesInUi, stripPicked, stripCounts, stripNote: stripNote.slice(0, 120), presetStrip });
-        const editorOk = sizesInUi.length === 7 && stripPicked && JSON.stringify(stripCounts) === JSON.stringify([{ n: 2, on: false }, { n: 3, on: true }, { n: 4, on: false }]) && stripNote.includes('1200 × 3600') && presetStrip;
+        const editorOk = sizesInUi.length === 9 && stripPicked && JSON.stringify(stripCounts) === JSON.stringify([{ n: 2, on: false }, { n: 3, on: true }, { n: 4, on: false }, { n: 6, on: false }]) && stripNote.includes('1200 × 3600') && presetStrip;
         // Guest rounds.
         await evaluate(win, `window.koko.setGuestExitPin(null, '718293')`).catch(() => undefined);
         const cases = [
