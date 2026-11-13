@@ -2,6 +2,16 @@
 
 Last updated: 2026-11-10
 
+## Update (2026-11-13): newest status, read before the 2026-11-10 handoff
+
+- Branch `main` is 20 commits ahead of `origin/main` (head 52a4465). Still nothing pushed; the owner has no camera, printer or other hardware to test with right now. Ask before pushing.
+- Built since the 2026-11-10 handoff: print-sheet preview with a cut line for 2-up strips, A5 and A4 portrait sizes and a 6-photo vertical strip, Guest clip length as a template setting (5, 10, 15 or 20 s), a colour filter for composed photos (black & white, vintage, vivid, soft, warm, cool). Open ideas (1) to (3) of the older list are therefore done.
+- Simulated check on 2026-11-13: typecheck passes, 153 unit tests pass, and the end-to-end phases first, summary, design, csp, sizes, video, rounds (20), disk-full, slideshow and the Guest phases (guest, guest-sizes, guest-multi, guest-video, guest-disk-full) pass. `cloud` and `fonts` were not rerun (they passed on 2026-11-10; nothing since touched them).
+- `slideshow` failed once and then passed twice on rerun: the script reads the slideshow id list right after "ready", before the new photo is indexed. It is a script timing issue; the script should wait for the list to grow.
+- QA pitfalls found: in PowerShell read the public key with `[IO.File]::ReadAllText`, not `Get-Content -Raw` (otherwise `ConvertTo-Json` writes `{"value": ...}` and the app reports "License service is not configured"); the licence config is baked in when packaging; run each operator phase on a fresh profile after `first`, because several phases in one profile leave state that makes later phases time out on "preview button".
+- The QA server was stopped and a clean package rebuilt (no QA key in `out/`).
+- Next, in order: screenshots of Guest, Templates and the print preview for a visual review; GIF; fix the slideshow wait; whole-event gallery with a PIN (needs cloud server code that is not in this repo). Real-hardware testing is still required before any event.
+
 ## Handoff (2026-11-10): read this first
 
 - Branch `main` is 13 commits ahead of `origin/main` (last pushed 89e7ed0, then everything up to 441a82a is local only). **Nothing has been pushed since; the owner wanted to test by hand first.** Ask before pushing.
