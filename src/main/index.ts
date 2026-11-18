@@ -217,7 +217,7 @@ function studioCloud() {
     studioCloudClient = new StudioCloudClient(dataDir(), { call: (route, payload) => licenses().studioCloudCall(route, payload) }, async (url, bytes) => {
       const response = await fetch(url, { method: 'PUT', headers: { 'content-type': 'image/jpeg' }, body: Buffer.from(bytes), signal: AbortSignal.timeout(120_000) });
       if (!response.ok) throw new Error('upload_failed');
-    });
+    }, Date.now, LICENSE_API_BASE_URL || null);
   }
   return studioCloudClient;
 }
@@ -238,12 +238,20 @@ async function uploadCaptureSessionToStudioCloud(sessionId: string, manual = fal
 }
 /** Plan or account problems that mean "this booth has no account cloud": the older folder-based album can still be tried. */
 const NO_ACCOUNT_CLOUD = ['cloud_unavailable', 'cloud_not_configured', 'license_inactive', 'account_link_required'];
+const retryable = (error: unknown) => error instanceof StudioCloudError && !error.permanent && !NO_ACCOUNT_CLOUD.includes(error.code);
 async function syncSessionToStudioCloud(sessionId: string) {
   try {
-    await uploadCaptureSessionToStudioCloud(sessionId, true);
-    return await studioCloud().ensureShare(sessionId);
+    // The link first: once this booth has used the cloud it is made on this PC, so the QR shows even with no internet.
+    const early = await studioCloud().ensureShare(sessionId).catch(error => { if (retryable(error)) return null; throw error; });
+    try { await uploadCaptureSessionToStudioCloud(sessionId, true); }
+    catch (error) {
+      // Offline: keep the printed link; photos and registration resume with the background recovery.
+      if (early && retryable(error)) { log('studio-cloud-upload-deferred', error, { sessionId }); return early; }
+      throw error;
+    }
+    return early ?? await studioCloud().ensureShare(sessionId);
   } catch (error) {
-    if (error instanceof StudioCloudError && NO_ACCOUNT_CLOUD.includes(error.code)) return undefined;
+    if (error instanceof StudioCloudError && NO_ACCOUNT_CLOUD.includes(error.code)) { studioCloud().forgetUnregisteredShare(sessionId); return undefined; }
     throw error;
   }
 }
@@ -1078,7 +1086,7 @@ app.on('ready', () => {
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
     if (!captureSessions().get(sessionId)) return { shareUrl: null, revoked: false };
     const accountShare = studioCloud().getShare(sessionId);
-    if (accountShare) return { shareUrl: accountShare.revoked ? null : accountShare.url, revoked: accountShare.revoked, expiresAt: accountShare.expiresAt };
+    if (accountShare) return { shareUrl: accountShare.revoked ? null : accountShare.url, revoked: accountShare.revoked, expiresAt: accountShare.expiresAt, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null };
     return photoCloud().getShareStatus(sessionId);
   });
   ipcMain.handle('koko:photo-cloud-revoke', async (event, sessionId: unknown) => {

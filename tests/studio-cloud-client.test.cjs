@@ -138,3 +138,67 @@ test('an index file written before guest links existed still loads', async () =>
   assert.equal(client.isUploaded('a'.repeat(32)), true);
   assert.equal(client.getShare(SESSION), null);
 });
+
+// ---------- offline links (booth-made tokens) ----------
+const ORIGIN = 'https://studio.example.invalid';
+function makeOnline(overrides = {}) {
+  const f = make({ '/v1/desktop/cloud/sessions': payload => ({ url: `${ORIGIN}/s/${payload.token}?openExternalBrowser=1`, eventUrl: `${ORIGIN}/e/${EVENT}`, shortCode: 'ABCD2345', expiresAt: '2026-12-20T00:00:00.000Z' }), ...overrides });
+  const calls = f.calls;
+  const offline = { on: false };
+  f.client = new StudioCloudClient(f.dir, { call: (route, payload) => { if (offline.on) return Promise.reject(new Error('fetch failed')); calls.push({ route, payload }); if (overrides[route]) return overrides[route](payload, calls); if (route.endsWith('/sessions')) return Promise.resolve({ url: `${ORIGIN}/s/${payload.token}?openExternalBrowser=1`, eventUrl: `${ORIGIN}/e/${EVENT}`, shortCode: 'ABCD2345', expiresAt: '2026-12-20T00:00:00.000Z' }); if (route.endsWith('/events')) return Promise.resolve({ eventId: EVENT }); if (route.endsWith('/init')) return Promise.resolve({ photoId: 'x', alreadyUploaded: false, uploadUrl: 'https://upload.example.invalid/k?sig=1' }); return Promise.resolve({ photoId: 'x', status: 'ready' }); } }, async (url, data) => { if (offline.on) throw new Error('fetch failed'); f.puts.push({ url, size: data.byteLength }); }, Date.now, ORIGIN);
+  return { ...f, offline };
+}
+const S2 = '44444444-4444-4444-8444-444444444444';
+
+test('after the booth has used the cloud once, a guest link is made on this PC with no network at all', async () => {
+  const f = makeOnline();
+  await f.client.uploadSession(session([{ id: P1, bytes: bytes('one') }]));
+  f.offline.on = true;
+  const before = f.calls.length;
+  const share = await f.client.ensureShare(S2);
+  assert.match(share.url, /^https:\/\/studio\.example\.invalid\/s\/[A-Za-z0-9_-]{43}\?openExternalBrowser=1$/);
+  assert.equal(share.registered, false);
+  assert.equal(f.calls.length, before, 'no request was needed');
+  assert.equal((await f.client.ensureShare(S2)).url, share.url, 'the same link every time');
+});
+
+test('the next upload registers the offline link first, then sends the photos; the code is remembered', async () => {
+  const f = makeOnline();
+  await f.client.uploadSession(session([{ id: P1, bytes: bytes('one') }]));
+  f.offline.on = true;
+  const share = await f.client.ensureShare(S2);
+  await assert.rejects(f.client.uploadSession({ sessionId: S2, eventId: null, eventName: 'Wedding A', photos: [{ id: P2, bytes: bytes('two') }] }), e => e instanceof StudioCloudError && !e.permanent);
+  f.offline.on = false;
+  await f.client.uploadSession({ sessionId: S2, eventId: null, eventName: 'Wedding A', photos: [{ id: P2, bytes: bytes('two') }] });
+  const routes = f.calls.map(c => c.route.split('/').slice(-1)[0]);
+  const reg = f.calls.find(c => c.route.endsWith('/sessions'));
+  assert.equal(reg.payload.token, share.token);
+  assert.equal(reg.payload.expectedCount, 1);
+  assert.ok(routes.lastIndexOf('sessions') < routes.lastIndexOf('init'), 'registered before the photos');
+  const saved = f.client.getShare(S2);
+  assert.deepEqual([saved.registered, saved.shortCode, saved.eventUrl, saved.url], [true, 'ABCD2345', `${ORIGIN}/e/${EVENT}`, share.url]);
+  await f.client.uploadSession({ sessionId: S2, eventId: null, eventName: 'Wedding A', photos: [{ id: P2, bytes: bytes('two') }] });
+  assert.equal(f.calls.filter(c => c.route.endsWith('/sessions')).length, 1, 'registered once');
+});
+
+test('a booth that never reached the cloud asks the server as before; an unregistered link is cancelled locally', async () => {
+  const f = makeOnline({ '/v1/desktop/cloud/shares': () => ({ url: `${ORIGIN}/s/${'B'.repeat(43)}`, expiresAt: '2026-12-20T00:00:00.000Z' }) });
+  const first = await f.client.ensureShare(SESSION);
+  assert.equal(first.token, undefined);
+  assert.ok(f.calls.some(c => c.route.endsWith('/cloud/shares')));
+  await f.client.uploadSession(session([{ id: P1, bytes: bytes('one') }]));
+  f.offline.on = true;
+  await f.client.ensureShare(S2);
+  assert.equal(await f.client.revokeShare(S2), true, 'cancelled without a network call');
+  assert.equal(await f.client.ensureShare(S2), null);
+  f.client.forgetUnregisteredShare(S2);
+});
+
+test('an account without cloud drops a link that was never registered', async () => {
+  const f = makeOnline({ '/v1/desktop/cloud/shares': () => ({ url: `${ORIGIN}/s/${'C'.repeat(43)}`, expiresAt: '2026-12-20T00:00:00.000Z' }) });
+  await f.client.uploadSession(session([{ id: P1, bytes: bytes('one') }]));
+  await f.client.ensureShare(S2);
+  f.client.forgetUnregisteredShare(S2);
+  assert.equal(f.client.getShare(S2), null);
+  assert.equal((await f.client.ensureShare(S2)).token, undefined, 'falls back to asking the server');
+});

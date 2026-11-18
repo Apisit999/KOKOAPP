@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -6,13 +6,20 @@ import path from 'node:path';
 export type StudioCloudApi = { call(route: string, payload: Record<string, unknown>): Promise<unknown> };
 export type StudioUpload = (url: string, bytes: Uint8Array) => Promise<void>;
 export type StudioCloudPhoto = { id: string; bytes: Uint8Array };
-export type StudioShare = { url: string; expiresAt: string; revoked: boolean };
-type Index = { schemaVersion: 1; events: Record<string, string>; uploaded: string[]; shares: Record<string, StudioShare> };
+/**
+ * token / registered: a link made on this PC (works offline). The server learns it on the next upload of the session.
+ * shortCode / eventUrl: printed under the QR for guests who cannot scan; known only after registration.
+ */
+export type StudioShare = { url: string; expiresAt: string; revoked: boolean; token?: string; registered?: boolean; shortCode?: string; eventUrl?: string };
+/** cloudReady: this booth has reached the customer's cloud at least once, so links made offline will work. */
+type Index = { schemaVersion: 1; events: Record<string, string>; uploaded: string[]; shares: Record<string, StudioShare>; cloudReady?: boolean };
+const SESSION_LINK_DAYS = 30;
+const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 export const MAX_CLOUD_PHOTO_BYTES = 25 * 1024 * 1024;
 const HEX32 = /^[0-9a-f]{32}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** Server answers that retrying cannot fix; the caller should stop and show a message instead of looping. */
-export const PERMANENT_CLOUD_CODES = ['quota_exceeded', 'cloud_unavailable', 'account_link_required', 'revoked', 'expired', 'device_limit', 'event_archived', 'photo_conflict'];
+export const PERMANENT_CLOUD_CODES = ['quota_exceeded', 'cloud_unavailable', 'account_link_required', 'revoked', 'expired', 'device_limit', 'event_archived', 'photo_conflict', 'session_conflict'];
 export class StudioCloudError extends Error {
   readonly code: string;
   readonly permanent: boolean;
@@ -35,8 +42,11 @@ export class StudioCloudClient {
   private readonly api: StudioCloudApi;
   private readonly upload: StudioUpload;
   private readonly clock: () => number;
-  constructor(userDataPath: string, api: StudioCloudApi, upload: StudioUpload, clock: () => number = Date.now) {
+  private readonly webOrigin: string | null;
+  /** webOrigin is the website guests open (the license API base URL); without it links always come from the server. */
+  constructor(userDataPath: string, api: StudioCloudApi, upload: StudioUpload, clock: () => number = Date.now, webOrigin: string | null = null) {
     this.api = api; this.upload = upload; this.clock = clock;
+    this.webOrigin = webOrigin && safeLink(webOrigin) ? webOrigin.replace(/\/+$/, '') : null;
     this.indexPath = path.join(userDataPath, 'studio-cloud-index.json');
   }
 
@@ -61,7 +71,17 @@ export class StudioCloudClient {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) throw new Error('Invalid capture session ID');
       const saved = this.read().shares[sessionId];
       if (saved?.revoked) return null;
+      // A link made here keeps its token for good; the server cannot issue a replacement for it.
+      if (saved?.token) return saved;
       if (saved && Date.parse(saved.expiresAt) > this.clock() + 60_000) return saved;
+      const index = this.read();
+      if (this.webOrigin && index.cloudReady) {
+        // Made on this PC with no network: the QR can print straight away, even when the internet is down.
+        const token = randomBytes(32).toString('base64url');
+        const share: StudioShare = { url: `${this.webOrigin}/s/${token}?openExternalBrowser=1`, expiresAt: new Date(this.clock() + SESSION_LINK_DAYS * 86_400_000).toISOString(), revoked: false, token, registered: false };
+        this.write({ ...index, shares: { ...index.shares, [sessionId]: share } });
+        return share;
+      }
       const made = await this.send('/v1/desktop/cloud/shares', { sessionId });
       if (!isObject(made) || typeof made.url !== 'string' || typeof made.expiresAt !== 'string' || !Number.isFinite(Date.parse(made.expiresAt)) || !safeLink(made.url)) throw new StudioCloudError('bad_response', false);
       const share: StudioShare = { url: made.url, expiresAt: made.expiresAt, revoked: false };
@@ -79,7 +99,7 @@ export class StudioCloudClient {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) throw new Error('Invalid capture session ID');
       const saved = this.read().shares[sessionId];
       if (!saved) return false;
-      if (!saved.revoked) await this.send('/v1/desktop/cloud/shares/revoke', { sessionId });
+      if (!saved.revoked && !(saved.token && !saved.registered)) await this.send('/v1/desktop/cloud/shares/revoke', { sessionId });
       const current = this.read();
       this.write({ ...current, shares: { ...current.shares, [sessionId]: { ...saved, revoked: true } } });
       return true;
@@ -93,7 +113,12 @@ export class StudioCloudClient {
     const clientEventId = input.eventId && /^[A-Za-z0-9_-]{8,64}$/.test(input.eventId) ? input.eventId : `session-${input.sessionId}`;
     let index = this.read();
     const pending = input.photos.filter(photo => !index.uploaded.includes(photo.id.replace(/-/g, '')));
-    if (!pending.length) return { uploaded: 0, skipped: input.photos.length };
+    if (!pending.length) {
+      // Everything is up already, but a link made here after the upload still has to be registered.
+      const known = index.events[clientEventId];
+      if (known) await this.registerLocalShare(input.sessionId, known, input.photos.length);
+      return { uploaded: 0, skipped: input.photos.length };
+    }
     let serverEventId = index.events[clientEventId];
     if (!serverEventId) {
       const created = await this.send('/v1/desktop/cloud/events', { clientEventId, name: (input.eventName || 'KOKO event').slice(0, 120), date: input.date ?? null });
@@ -102,6 +127,8 @@ export class StudioCloudClient {
       index = { ...this.read(), events: { ...this.read().events, [clientEventId]: serverEventId } };
       this.write(index);
     }
+    if (!index.cloudReady) { index = { ...this.read(), cloudReady: true }; this.write(index); }
+    await this.registerLocalShare(input.sessionId, serverEventId, input.photos.length);
     let uploaded = 0;
     for (const photo of pending) {
       const photoId = photo.id.replace(/-/g, '');
@@ -123,6 +150,28 @@ export class StudioCloudClient {
     return { uploaded, skipped: input.photos.length - pending.length };
   }
 
+  /** Tells the server about a link made on this PC, before its photos, so the guest page can show "uploading 1/4". */
+  private async registerLocalShare(sessionId: string, eventId: string, expectedCount: number) {
+    const saved = this.read().shares[sessionId];
+    if (!saved?.token || saved.registered || saved.revoked) return;
+    const made = await this.send('/v1/desktop/cloud/sessions', { sessionId, eventId, token: saved.token, expectedCount: Math.min(expectedCount, 100) });
+    if (!isObject(made) || typeof made.shortCode !== 'string' || !/^[2-9A-HJ-NP-Z]{8}$/.test(made.shortCode) || typeof made.expiresAt !== 'string' || !Number.isFinite(Date.parse(made.expiresAt))
+      || typeof made.eventUrl !== 'string' || !safeLink(made.eventUrl)) throw new StudioCloudError('bad_response', false);
+    const current = this.read();
+    const latest = current.shares[sessionId];
+    if (!latest || latest.token !== saved.token) return;
+    this.write({ ...current, shares: { ...current.shares, [sessionId]: { ...latest, registered: true, shortCode: made.shortCode, eventUrl: made.eventUrl, expiresAt: made.expiresAt } } });
+  }
+
+  /** A link made here is dropped when the account turns out to have no cloud; it was never shown as working. */
+  forgetUnregisteredShare(sessionId: string) {
+    const current = this.read();
+    const saved = current.shares[sessionId];
+    if (!saved?.token || saved.registered) return;
+    const shares = { ...current.shares }; delete shares[sessionId];
+    this.write({ ...current, shares, cloudReady: false });
+  }
+
   private async send(route: string, payload: Record<string, unknown>) {
     try { return await this.api.call(route, payload); }
     catch (error) {
@@ -140,8 +189,9 @@ export class StudioCloudClient {
       || !Object.values(value.events).every(id => typeof id === 'string' && HEX32.test(id))) throw new Error('Cloud upload index is invalid; existing data was preserved.');
     // Index files written before share links existed have no "shares" yet.
     const shares = value.shares === undefined ? {} : value.shares;
-    if (!isObject(shares) || !Object.values(shares).every(entry => isObject(entry) && typeof entry.url === 'string' && safeLink(entry.url) && typeof entry.expiresAt === 'string' && typeof entry.revoked === 'boolean')) throw new Error('Cloud upload index is invalid; existing data was preserved.');
-    return { schemaVersion: 1, events: value.events as Record<string, string>, uploaded: value.uploaded as string[], shares: shares as Record<string, StudioShare> };
+    if (!isObject(shares) || !Object.values(shares).every(entry => isObject(entry) && typeof entry.url === 'string' && safeLink(entry.url) && typeof entry.expiresAt === 'string' && typeof entry.revoked === 'boolean'
+      && (entry.token === undefined || (typeof entry.token === 'string' && TOKEN.test(entry.token))))) throw new Error('Cloud upload index is invalid; existing data was preserved.');
+    return { schemaVersion: 1, events: value.events as Record<string, string>, uploaded: value.uploaded as string[], shares: shares as Record<string, StudioShare>, cloudReady: value.cloudReady === true };
   }
   private write(index: Index) {
     mkdirSync(path.dirname(this.indexPath), { recursive: true });
