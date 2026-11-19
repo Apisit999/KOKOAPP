@@ -47,7 +47,8 @@
     "test:event-summary": "node --test tests/event-summary.test.cjs",
     "test:problem-report": "node --test tests/problem-report.test.cjs",
     "test:printer-readiness": "node --test tests/printer-readiness.test.cjs",
-    "test:studio-cloud": "node --test tests/studio-cloud-client.test.cjs"
+    "test:studio-cloud": "node --test tests/studio-cloud-client.test.cjs",
+    "test:receipt": "node --test tests/escpos-receipt.test.cjs"
   },
   "dependencies": {
     "@fontsource/cormorant-garamond": "5.3.0",
