@@ -3,7 +3,8 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import path from 'node:path';
 
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; createdAt: string; updatedAt: string };
+/** receiptMessage: a short thank-you printed at the bottom of the guest receipt for this event. Older event files do not have it. */
+export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; receiptMessage?: string; createdAt: string; updatedAt: string };
 type EventDocument = { schemaVersion: 1; activeEventId: string | null; events: PhotoboothEvent[] };
 const EMPTY: EventDocument = { schemaVersion: 1, activeEventId: null, events: [] };
 
@@ -14,6 +15,7 @@ function validEvent(value: unknown): value is PhotoboothEvent {
     && typeof event.name === 'string' && event.name.length > 0 && event.name.length <= 80
     && (event.date === null || (typeof event.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(event.date) && Number.isFinite(Date.parse(event.date))))
     && typeof event.notes === 'string' && event.notes.length <= 500
+    && (event.receiptMessage === undefined || (typeof event.receiptMessage === 'string' && event.receiptMessage.length <= 80))
     && typeof event.createdAt === 'string' && Number.isFinite(Date.parse(event.createdAt))
     && typeof event.updatedAt === 'string' && Number.isFinite(Date.parse(event.updatedAt));
 }
@@ -77,17 +79,19 @@ export class EventStore {
     this.write({ schemaVersion: 1, activeEventId: document.activeEventId === id ? null : document.activeEventId, events: document.events.filter(event => event.id !== id) });
     return true;
   }
-  private validateInput(input: unknown): Pick<PhotoboothEvent, 'name' | 'date' | 'notes'> {
+  private validateInput(input: unknown): Pick<PhotoboothEvent, 'name' | 'date' | 'notes' | 'receiptMessage'> {
     if (!input || typeof input !== 'object') throw new Error('Invalid event details');
     const value = input as Record<string, unknown>;
     const name = typeof value.name === 'string' ? value.name.trim() : '';
     const date = value.date === '' || value.date === null ? null : value.date;
     const notes = value.notes === undefined ? '' : value.notes;
+    const receiptMessage = value.receiptMessage === undefined || value.receiptMessage === null ? '' : value.receiptMessage;
+    if (typeof receiptMessage !== 'string' || receiptMessage.length > 80 || /[\u0000-\u001f]/.test(receiptMessage)) throw new Error('The receipt message is limited to 80 characters on one line');
     if (!name || name.length > 80 || typeof notes !== 'string' || notes.length > 500
       || !(date === null || (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date))))) {
       throw new Error('Enter a valid event name, date, and note');
     }
-    return { name, date: date as string | null, notes };
+    return { name, date: date as string | null, notes, receiptMessage: receiptMessage.trim() };
   }
   private read(): EventDocument {
     if (this.document) return this.document;

@@ -3,7 +3,7 @@ import type { PhotoboothEvent } from '../shared/contract';
 import { summarizeEvent, type EventSummary } from './event-summary';
 
 type EventListItem = PhotoboothEvent & { photoCount: number };
-const blank = { name: '', date: '', notes: '' };
+const blank = { name: '', date: '', notes: '', receiptMessage: '' };
 
 export function EventsPage({ events, activeEventId, onRefresh, onMessage, th }: {
   events: EventListItem[]; activeEventId: string | null; onRefresh: () => Promise<void>; onMessage: (value: string) => void; th: boolean;
@@ -43,7 +43,7 @@ export function EventsPage({ events, activeEventId, onRefresh, onMessage, th }: 
     try { await window.koko.deleteEvent(item.id); await onRefresh(); if (editingId === item.id) { setEditingId(''); setForm(blank); } }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not delete this event.'); }
   }
-  function edit(item: EventListItem) { setEditingId(item.id); setForm({ name: item.name, date: item.date ?? '', notes: item.notes }); }
+  function edit(item: EventListItem) { setEditingId(item.id); setForm({ name: item.name, date: item.date ?? '', notes: item.notes, receiptMessage: item.receiptMessage ?? '' }); }
 
   return <>
     <p className="eyebrow">KOKO / EVENTS</p>
@@ -55,6 +55,7 @@ export function EventsPage({ events, activeEventId, onRefresh, onMessage, th }: 
         <h2>{editingId ? (th ? 'แก้ไข Event' : 'Edit event') : (th ? 'สร้าง Event' : 'Create an event')}</h2>
         <label>{th ? 'ชื่อ Event' : 'Event name'}<input required maxLength={80} value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder={th ? 'เช่น งานเลี้ยงบริษัท' : 'e.g. Company celebration'} /></label>
         <label>{th ? 'วันที่' : 'Date'}<input type="date" value={form.date} onChange={event => setForm(current => ({ ...current, date: event.target.value }))} /></label>
+        <label>{th ? 'ข้อความท้ายใบเสร็จ (ไม่บังคับ)' : 'Receipt message (optional)'}<input maxLength={80} value={form.receiptMessage} placeholder={th ? 'เช่น ขอบคุณที่มาร่วมงานกับเรา' : 'e.g. Thank you for celebrating with us'} onChange={event => setForm(current => ({ ...current, receiptMessage: event.target.value }))} /><small>{th ? 'พิมพ์ท้ายใบเสร็จของงานนี้ สั้น ๆ บรรทัดเดียว (ไม่เกิน 80 ตัวอักษร) และไม่ควรใส่ชื่อลูกค้า' : 'Printed at the bottom of this event\'s receipt: one short line (80 characters at most). Avoid customers\' names.'}</small></label>
         <label>{th ? 'บันทึกเพิ่มเติม' : 'Notes'}<textarea maxLength={500} rows={4} value={form.notes} onChange={event => setForm(current => ({ ...current, notes: event.target.value }))} /></label>
         {error && <p className="event-error" role="alert">{error}</p>}
         <div className="event-form-actions"><button className="primary" type="submit" disabled={saving}>{saving ? (th ? 'กำลังบันทึก…' : 'Saving…') : editingId ? (th ? 'บันทึกการแก้ไข' : 'Save changes') : (th ? 'สร้าง Event' : 'Create event')}</button>{editingId && <button type="button" className="camera-secondary" onClick={() => { setEditingId(''); setForm(blank); setError(''); }}>{th ? 'ยกเลิก' : 'Cancel'}</button>}</div>

@@ -82,3 +82,13 @@ test('receipt: a caption picture replaces the ASCII caption and the QR still fol
   assert.ok(!shown.includes('Wedding A') && !shown.includes('Scan for your photos'));
   assert.ok(find(bytes, [0x1d, 0x76, 0x30, 0]) > 0 && find(bytes, [0x1d, 0x76, 0x30, 0]) < find(bytes, [0x31, 0x50, 0x30]));
 });
+
+test('receipt: the event message picture prints under the validity line and before the cut', () => {
+  const { buildReceipt } = require('../src/main/services/escpos-receipt.ts');
+  const bytes = Buffer.from(buildReceipt({ shareUrl: URL, expiresAt: '2026-12-18T00:00:00Z', footerRaster: { width: 8, height: 1, data: new Uint8Array([0xaa]) } }));
+  const valid = bytes.indexOf('Valid until');
+  const raster = find(bytes, [0x1d, 0x76, 0x30, 0]);
+  assert.ok(valid > 0 && raster > valid, 'picture after the validity line');
+  assert.deepEqual([...bytes.subarray(-4)], [0x1d, 0x56, 0x42, 3], 'still ends with the cut');
+  assert.ok(!Buffer.from(buildReceipt({ shareUrl: URL })).includes(Buffer.from([0x1d, 0x76, 0x30])), 'no picture when there is no message');
+});

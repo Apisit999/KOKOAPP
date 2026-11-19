@@ -19,10 +19,22 @@ function splitWords(text: string): string[] {
  * on every printer model instead of depending on the printer's own code pages.
  */
 export async function drawReceiptCaption(paper: 58 | 80, eventName: string | null, th: boolean): Promise<ReceiptCaptionImage> {
-  const width = PAPER_DOTS[paper];
-  const lines: Array<{ text: string; size: number; weight: number }> = [];
+  const lines: ReceiptLine[] = [];
   if (eventName?.trim()) lines.push({ text: eventName.trim().slice(0, 80), size: paper === 58 ? 30 : 36, weight: 600 });
   lines.push({ text: th ? 'สแกนเพื่อรับรูปของคุณ' : 'Scan for your photos', size: paper === 58 ? 28 : 32, weight: 400 });
+  return drawReceiptLines(paper, lines);
+}
+
+/** The event's own thank-you message for the bottom of the slip, or null when the event has none. */
+export async function drawReceiptFooter(paper: 58 | 80, message: string | null | undefined): Promise<ReceiptCaptionImage | null> {
+  const text = message?.trim();
+  if (!text) return null;
+  return drawReceiptLines(paper, [{ text: text.slice(0, 80), size: paper === 58 ? 26 : 30, weight: 400 }]);
+}
+
+type ReceiptLine = { text: string; size: number; weight: number };
+async function drawReceiptLines(paper: 58 | 80, lines: ReceiptLine[]): Promise<ReceiptCaptionImage> {
+  const width = PAPER_DOTS[paper];
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('Could not draw the receipt');
@@ -62,11 +74,13 @@ export async function drawReceiptCaption(paper: 58 | 80, eventName: string | nul
  * Prints the guest receipt for one round; with no session it prints a test receipt.
  * The event name is printed only when the owner turned that on: it is often the customers' own names.
  */
-export async function printGuestReceipt(sessionId: string | null, eventName: string | null, th: boolean, copies?: number) {
+export type ReceiptEventInfo = { name: string | null; receiptMessage?: string | null };
+export async function printGuestReceipt(sessionId: string | null, event: ReceiptEventInfo | null, th: boolean, copies?: number) {
   const settings = await window.koko.getReceiptSettings();
   if (!settings.printer) throw new Error(th ? 'ยังไม่ได้ตั้งค่าเครื่องพิมพ์ใบเสร็จ' : 'No receipt printer is set up.');
-  const caption = await drawReceiptCaption(settings.paper, settings.showEventName ? eventName : null, th);
-  await window.koko.printReceipt(sessionId, caption, copies);
+  const caption = await drawReceiptCaption(settings.paper, settings.showEventName ? event?.name ?? null : null, th);
+  const footer = await drawReceiptFooter(settings.paper, event?.receiptMessage);
+  await window.koko.printReceipt(sessionId, caption, copies, footer);
 }
 
 /** Plain-language printer state for staff; "unknown" is normal for printers that do not report status. */
@@ -85,7 +99,7 @@ export function describePrinterStatus(status: PrinterStatus, th: boolean): { ok:
 
 type Kind = 'none' | ReceiptPrinterConfig['kind'];
 
-export function ReceiptSettingsBlock({ th, eventName }: { th: boolean; eventName: string | null }) {
+export function ReceiptSettingsBlock({ th, event }: { th: boolean; event: ReceiptEventInfo | null }) {
   const [settings, setSettings] = useState<ReceiptSettings | null>(null);
   const [lists, setLists] = useState<{ windows: string[]; serial: string[] }>({ windows: [], serial: [] });
   const [host, setHost] = useState('');
@@ -107,7 +121,7 @@ export function ReceiptSettingsBlock({ th, eventName }: { th: boolean; eventName
   }
   async function test() {
     setBusy(true); setMessage('');
-    try { await printGuestReceipt(null, eventName, th); setMessage(th ? 'ส่งใบเสร็จทดสอบแล้ว' : 'Test receipt sent.'); }
+    try { await printGuestReceipt(null, event, th); setMessage(th ? 'ส่งใบเสร็จทดสอบแล้ว' : 'Test receipt sent.'); }
     catch (error) { setMessage(error instanceof Error ? error.message : (th ? 'พิมพ์ไม่สำเร็จ' : 'Printing failed.')); }
     finally { setBusy(false); }
   }

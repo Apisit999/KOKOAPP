@@ -805,3 +805,8 @@ button { -webkit-tap-highlight-color: transparent }
 .booth-status-list strong { font-size: var(--fs-md) }
 .booth-status-list span { color: var(--secondary); font-size: var(--fs-sm); line-height: 1.6 }
 .receipt-print-controls { display: inline-flex; gap: 4px }
+
+.session-search { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 }
+.session-search input[type=search] { flex: 1 1 280px; min-height: 40px }
+.session-search select { min-height: 40px }
+.session-search small { flex-basis: 100%; color: var(--secondary) }

@@ -777,16 +777,17 @@ app.on('ready', () => {
     if (!settings.printer) throw new Error('Choose a receipt printer first');
     return getReceiptPrinterStatus(settings.printer);
   });
-  ipcMain.handle('koko:receipt-print', async (event, sessionId: unknown, captionValue: unknown, copiesValue: unknown) => {
+  ipcMain.handle('koko:receipt-print', async (event, sessionId: unknown, captionValue: unknown, copiesValue: unknown, footerValue: unknown) => {
     trusted(event);
     const settings = receiptSettings();
     if (!settings.printer) throw new Error('Choose a receipt printer first');
     const captionRaster = validCaption(captionValue);
+    const footerRaster = validCaption(footerValue);
     const copies = copiesValue === undefined || copiesValue === null ? settings.copies : clampReceiptCopies(copiesValue);
     /** One job with the slip repeated: each copy ends with its own cut. */
     const repeat = (bytes: Uint8Array) => copies === 1 ? bytes : Buffer.concat(Array.from({ length: copies }, () => Buffer.from(bytes)));
     if (sessionId === null || sessionId === undefined) {
-      await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster }));
+      await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster, footerRaster }));
       return;
     }
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
@@ -796,7 +797,7 @@ app.on('ready', () => {
       ? { shareUrl: accountShare.revoked ? null : accountShare.url, expiresAt: accountShare.expiresAt ?? null, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null }
       : { ...photoCloud().getShareStatus(sessionId), shortCode: null, eventUrl: null };
     if (!share.shareUrl) throw new Error('This round has no guest link yet. Upload it first.');
-    await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster })));
+    await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster, footerRaster })));
   });
   ipcMain.handle('koko:slideshow-settings-get', event => { trusted(event); return slideshowSettings(); });
   ipcMain.handle('koko:slideshow-settings-save', (event, value: unknown) => {

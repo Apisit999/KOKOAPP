@@ -28,7 +28,7 @@ export type FontRecord = { id: string; name: string; fileName: string; format: '
 export type SlideshowSettings = { enabled: boolean; secondsPerSlide: 4 | 6 | 10; limit: 20 | 50 | 100 };
 export type SavedVideo = { id: string; width: number; height: number; byteLength: number; durationMs: number; sha256: string; savedAt: string; eventId?: string; cloudUploaded?: boolean };
 export type VideoRecord = SavedVideo & { fileName: string; mimeType: 'video/webm' };
-export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; createdAt: string; updatedAt: string };
+export type PhotoboothEvent = { id: string; name: string; date: string | null; notes: string; receiptMessage?: string; createdAt: string; updatedAt: string };
 export type PhotoboothEventWithCount = PhotoboothEvent & { photoCount: number };
 export type CaptureTextLayer = { id: string; text: string; x: number; y: number; width: number; fontSize: number; color: string; align: 'left' | 'center' | 'right'; fontId?: string };
 export type CaptureImageLayer = { id: string; src: string; x: number; y: number; width: number; height: number };
@@ -90,7 +90,7 @@ export type Bridge = {
   cancelPrintJob(jobId: string): Promise<PrintJobRecord | null>;
   retryPrintJob(jobId: string): Promise<PrintJobRecord | null>;
   getPhotoCloudShareUrl(sessionId: string): Promise<string | null>;
-  getPhotoCloudShareStatus(sessionId: string): Promise<{ shareUrl: string | null; revoked: boolean; expiresAt: string | null }>;
+  getPhotoCloudShareStatus(sessionId: string): Promise<{ shareUrl: string | null; revoked: boolean; expiresAt: string | null; shortCode?: string | null; eventUrl?: string | null }>;
   revokePhotoCloudShare(sessionId: string): Promise<boolean>;
   listPhotos(offset?: number, limit?: number, eventId?: string | null): Promise<PhotoRecord[]>;
   readPhoto(id: string): Promise<{ photo: PhotoRecord; jpegBytes: Uint8Array }>;
@@ -109,8 +109,8 @@ export type Bridge = {
   cancelLicenseAccountLink(): Promise<boolean>;
   deactivateLicense(): Promise<boolean>;
   listEvents(): Promise<{ events: PhotoboothEventWithCount[]; activeEventId: string | null }>;
-  createEvent(value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
-  updateEvent(id: string, value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
+  createEvent(value: { name: string; date: string | null; notes: string; receiptMessage?: string }): Promise<PhotoboothEvent>;
+  updateEvent(id: string, value: { name: string; date: string | null; notes: string; receiptMessage?: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
   getBoothStatus(): Promise<BoothStatus>;
@@ -118,7 +118,7 @@ export type Bridge = {
   saveReceiptSettings(value: ReceiptSettings): Promise<ReceiptSettings>;
   listReceiptPrinters(): Promise<{ windows: string[]; serial: string[] }>;
   /** Prints the guest receipt of a session; with no session it prints a test receipt. */
-  printReceipt(sessionId: string | null, caption: ReceiptCaptionImage | null, copies?: number): Promise<void>;
+  printReceipt(sessionId: string | null, caption: ReceiptCaptionImage | null, copies?: number, footer?: ReceiptCaptionImage | null): Promise<void>;
   /** Asks the chosen receipt printer for paper, cover and offline state (full detail only for LAN printers). */
   getReceiptPrinterStatus(): Promise<PrinterStatus>;
   getSlideshowSettings(): Promise<SlideshowSettings>;

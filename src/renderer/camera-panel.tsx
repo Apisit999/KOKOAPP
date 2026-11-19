@@ -14,7 +14,7 @@ import { drawImageLayers, drawTextLayers, loadImageLayers } from './template-lay
 import { ensureFonts, fontStack } from './fonts';
 import { cameraManager, hasLowPhotoStorage, formatStorageSpace, PhotoThumb } from './ui-common';
 
-export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageReady = false, storageAvailableBytes = null, photos = [], onOpenPhoto, onDeletePhoto, onExportPhoto, onOpenStorage, onOpenGallery, onOpenSettings, onOpenPrint, onOpenGuestDisplay, guestDisplayActive = false, availableGuestDisplays = [], selectedGuestDisplayId = null, onSelectGuestDisplay, storageName = null, activeEventName = null, guestMode = false, guestTemplate = null }: {
+export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageReady = false, storageAvailableBytes = null, photos = [], onOpenPhoto, onDeletePhoto, onExportPhoto, onOpenStorage, onOpenGallery, onOpenSettings, onOpenPrint, onOpenGuestDisplay, guestDisplayActive = false, availableGuestDisplays = [], selectedGuestDisplayId = null, onSelectGuestDisplay, storageName = null, activeEventName = null, activeReceiptMessage = null, guestMode = false, guestTemplate = null }: {
   th: boolean; onStatus?: (status: CameraStatus) => void; onCapture?: (photo: SavedPhoto) => void | Promise<void>; onVideoCapture?: (video: SavedVideo) => void | Promise<void>; storageReady?: boolean;
   storageAvailableBytes?: number | null;
   photos?: PhotoRecord[]; onOpenPhoto?: (photo: PhotoRecord) => void; onDeletePhoto?: (photo: PhotoRecord) => void;
@@ -22,7 +22,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   onOpenPrint?: () => void; onOpenGuestDisplay?: () => void; guestDisplayActive?: boolean;
   availableGuestDisplays?: Array<{ id: number; label: string; width: number; height: number }>;
   selectedGuestDisplayId?: number | null; onSelectGuestDisplay?: (displayId: number) => void;
-  storageName?: string | null; activeEventName?: string | null; guestMode?: boolean; guestTemplate?: GuestTemplate | null;
+  storageName?: string | null; activeEventName?: string | null; activeReceiptMessage?: string | null; guestMode?: boolean; guestTemplate?: GuestTemplate | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const selectedIdRef = useRef('');
@@ -63,7 +63,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     if (!manual && receiptPrintedRef.current.has(sessionId)) return;
     receiptPrintedRef.current.add(sessionId);
     setReceiptBusy(true);
-    try { await printGuestReceipt(sessionId, activeEventName, th, manual ? receiptCopies : undefined); if (manual) setCaptureNotice(th ? 'ส่งใบเสร็จไปที่เครื่องพิมพ์แล้ว' : 'Receipt sent to the printer'); }
+    try { await printGuestReceipt(sessionId, { name: activeEventName, receiptMessage: activeReceiptMessage }, th, manual ? receiptCopies : undefined); if (manual) setCaptureNotice(th ? 'ส่งใบเสร็จไปที่เครื่องพิมพ์แล้ว' : 'Receipt sent to the printer'); }
     catch (error) { receiptPrintedRef.current.delete(sessionId); setCaptureNotice(error instanceof Error ? error.message : (th ? 'พิมพ์ใบเสร็จไม่สำเร็จ' : 'Could not print the receipt')); }
     finally { setReceiptBusy(false); }
   }

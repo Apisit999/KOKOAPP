@@ -1,5 +1,5 @@
 // Shows the guest receipt the way a printer would put it on paper, without a printer.
-// Usage: node scripts/receipt-preview.cjs [--paper 58|80] [--event "Event name" (optional: off by default)] [--lang th|en] [--out receipt.png] [--url https://...]
+// Usage: node scripts/receipt-preview.cjs [--message "Thank you"] [--paper 58|80] [--event "Event name" (optional: off by default)] [--lang th|en] [--out receipt.png] [--url https://...]
 // It builds the receipt with the app's own code, runs the bytes through a virtual ESC/POS printer, draws the result in
 // Microsoft Edge (headless) and tries to read the printed QR code back with the browser's barcode detector.
 const { spawn } = require('node:child_process');
@@ -14,6 +14,8 @@ const paper = args.paper === '80' ? 80 : 58;
 const lang = args.lang === 'en' ? 'en' : 'th';
 // Like the app, the event name is left off unless asked for (--event): it is often the customers' own names.
 const eventName = args.event ?? null;
+// --message: the event's own thank-you line under the validity date (Thai is fine).
+const message = args.message ?? null;
 const shareUrl = args.url ?? `https://kokomemory.com/s/${'A1b2C3d4'.repeat(5)}xyz?openExternalBrowser=1`;
 const out = path.resolve(args.out ?? 'receipt-preview.png');
 const EDGE = process.env.EDGE_PATH ?? [
@@ -23,7 +25,7 @@ if (!EDGE) { console.error('Microsoft Edge was not found. Set EDGE_PATH to a Chr
 
 const DRAW_CAPTION = `(async (width, size, name, caption) => {
   const FONT = "'IBM Plex Sans Thai','Noto Sans Thai','Leelawadee UI',Tahoma,'Segoe UI',sans-serif";
-  const lines = [...(name ? [{ text: name, size: size + 2, weight: 600 }] : []), { text: caption, size, weight: 400 }];
+  const lines = [...(name ? [{ text: name, size: size + 2, weight: 600 }] : []), ...(caption ? [{ text: caption, size, weight: 400 }] : [])];
   const canvas = document.createElement('canvas'); const x = canvas.getContext('2d', { willReadFrequently: true });
   const font = line => line.weight + ' ' + line.size + 'px ' + FONT; const wrapped = [];
   for (const line of lines) {
@@ -102,8 +104,10 @@ const RENDER = `(async (items, paperDots) => {
 
     const caption = await evaluate(`${DRAW_CAPTION}(${dots}, ${paper === 58 ? 28 : 32}, ${JSON.stringify(eventName)}, ${JSON.stringify(lang === 'th' ? 'สแกนเพื่อรับรูปของคุณ' : 'Scan for your photos')})`);
     const { rasterFromRgba } = require('../src/shared/receipt-raster.ts');
+    const footerImage = message ? await evaluate(`${DRAW_CAPTION}(${dots}, ${paper === 58 ? 26 : 30}, null, ${JSON.stringify(message)})`) : null;
+    const footerRaster = footerImage ? rasterFromRgba(Uint8Array.from(footerImage.rgba), footerImage.width, footerImage.height) : null;
     const raster = rasterFromRgba(Uint8Array.from(caption.rgba), caption.width, caption.height);
-    const bytes = buildReceipt({ shareUrl, shortCode: 'ABCD2345', eventUrl: 'https://kokomemory.com/e/3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), paper, captionRaster: raster });
+    const bytes = buildReceipt({ shareUrl, shortCode: 'ABCD2345', eventUrl: 'https://kokomemory.com/e/3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), paper, captionRaster: raster, footerRaster });
     const result = emulate(bytes, { paperDots: dots });
     const items = result.items.filter(item => item.type !== 'reset').map(item => item.type === 'raster' ? { ...item, data: undefined, dataBase64: item.data.toString('base64') } : item);
     const rendered = await evaluate(`${RENDER}(${JSON.stringify(items)}, ${dots})`);

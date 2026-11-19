@@ -20,6 +20,8 @@ export type ReceiptInput = {
   paper?: 58 | 80;
   /** Replaces the event name and the "Scan for your photos" line, so any language prints. */
   captionRaster?: ReceiptRaster | null;
+  /** A short message under the validity line, drawn by the app so Thai prints on any model. */
+  footerRaster?: ReceiptRaster | null;
 };
 
 const ESC = 0x1b, GS = 0x1d, LF = 0x0a;
@@ -95,6 +97,7 @@ export function buildReceipt(input: ReceiptInput): Uint8Array {
     const date = new Date(input.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' });
     parts.push(text(`Valid until ${date}`), Buffer.from([LF]));
   }
+  if (input.footerRaster) parts.push(Buffer.from([LF]), rasterCommands(input.footerRaster));
   // Minimal feed, then a partial cut: the receipt stays as short as the content.
   parts.push(Buffer.from([GS, 0x56, 0x42, 3]));
   return new Uint8Array(Buffer.concat(parts));
