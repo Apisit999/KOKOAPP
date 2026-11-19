@@ -52,3 +52,33 @@ test('network printer: every byte arrives on port 9100-style sockets; a dead pri
   await assert.rejects(sendToNetworkPrinter('127.0.0.1', bytes, { port, timeoutMs: 1000 }), /unavailable|did not answer/);
   await assert.rejects(sendToNetworkPrinter('bad host;rm', bytes), /Invalid printer address/);
 });
+
+test('raster: dark pixels become set bits (MSB first), padded to whole bytes; the command carries width in bytes and rows', () => {
+  const { rasterFromRgba, rasterCommands } = require('../src/main/services/escpos-receipt.ts');
+  const px = (r, g, b, a = 255) => [r, g, b, a];
+  const row = [px(0, 0, 0), px(255, 255, 255), px(0, 0, 0), px(0, 0, 0, 0), px(10, 10, 10), px(250, 250, 250), px(0, 0, 0), px(255, 255, 255), px(0, 0, 0)];
+  const raster = rasterFromRgba(new Uint8Array(row.flat()), 9, 1);
+  assert.equal(raster.width, 16);
+  assert.deepEqual([...raster.data], [0b10101010, 0b10000000], 'transparent counts as white');
+  const command = rasterCommands(raster);
+  assert.deepEqual([...command.subarray(0, 8)], [0x1d, 0x76, 0x30, 0, 2, 0, 1, 0]);
+  assert.equal(command.length, 8 + 2);
+});
+
+test('raster: tall pictures are sent in strips of at most 128 rows; bad sizes are refused', () => {
+  const { rasterCommands } = require('../src/main/services/escpos-receipt.ts');
+  const command = rasterCommands({ width: 8, height: 300, data: new Uint8Array(300) });
+  assert.equal(command.length, 3 * 8 + 300);
+  assert.equal(command[6], 128);
+  assert.throws(() => rasterCommands({ width: 10, height: 1, data: new Uint8Array(2) }), /Invalid receipt image/);
+  assert.throws(() => rasterCommands({ width: 8, height: 2, data: new Uint8Array(1) }), /Invalid receipt image/);
+  assert.throws(() => rasterCommands({ width: 8, height: 5000, data: new Uint8Array(5000) }), /Invalid receipt image/);
+});
+
+test('receipt: a caption picture replaces the ASCII caption and the QR still follows it', () => {
+  const { buildReceipt } = require('../src/main/services/escpos-receipt.ts');
+  const bytes = Buffer.from(buildReceipt({ shareUrl: URL, eventName: 'Wedding A', captionRaster: { width: 8, height: 2, data: new Uint8Array([0xff, 0x81]) } }));
+  const shown = bytes.toString('latin1');
+  assert.ok(!shown.includes('Wedding A') && !shown.includes('Scan for your photos'));
+  assert.ok(find(bytes, [0x1d, 0x76, 0x30, 0]) > 0 && find(bytes, [0x1d, 0x76, 0x30, 0]) < find(bytes, [0x31, 0x50, 0x30]));
+});

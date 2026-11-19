@@ -9,6 +9,9 @@ import { PhotoStore, validateStorageRoot } from './services/photo-store';
 import { VideoStore } from './services/video-store';
 import { FontStore, MAX_FONT_BYTES } from './services/font-store';
 import { normalizeSlideshowSettings, pickSlideshowPhotoIds } from '../shared/slideshow';
+import { normalizeReceiptSettings } from '../shared/receipt-settings';
+import { buildReceipt, RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from './services/escpos-receipt';
+import { listSerialPorts, listWindowsPrinters, sendReceipt } from './services/receipt-printers';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
 import { LicenseRuntime } from './services/license-runtime';
@@ -74,6 +77,7 @@ const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const guestModeFile = () => path.join(dataDir(), 'guest-mode.json');
 const slideshowFile = () => path.join(dataDir(), 'slideshow.json');
+const receiptFile = () => path.join(dataDir(), 'receipt-printer.json');
 const photoStorageConfigFile = () => path.join(dataDir(), 'photo-storage.json');
 const cameraFolderConfigFile = () => path.join(dataDir(), 'camera-folder.json');
 const photoStores = new Map<string, PhotoStore>();
@@ -698,6 +702,47 @@ app.on('ready', () => {
     slideshowCache = { at: Date.now(), ids };
     return ids;
   };
+  // Guest receipt: settings are stored like the slideshow ones; the receipt itself is built here from the session's saved link.
+  const receiptSettings = () => { try { return normalizeReceiptSettings(JSON.parse(readFileSync(receiptFile(), 'utf8'))); } catch { return normalizeReceiptSettings(undefined); } };
+  const validCaption = (value: unknown): ReceiptRaster | null => {
+    if (value === null || value === undefined) return null;
+    const item = value as { width?: unknown; height?: unknown; data?: unknown };
+    if (!item || typeof item.width !== 'number' || typeof item.height !== 'number' || !(item.data instanceof Uint8Array)) throw new Error('Invalid receipt image');
+    if (item.width > RASTER_MAX_WIDTH || item.height > RASTER_MAX_HEIGHT) throw new Error('Invalid receipt image');
+    return { width: item.width, height: item.height, data: item.data };
+  };
+  ipcMain.handle('koko:receipt-settings-get', event => { trusted(event); return receiptSettings(); });
+  ipcMain.handle('koko:receipt-settings-save', (event, value: unknown) => {
+    trusted(event);
+    const next = normalizeReceiptSettings(value);
+    const temporaryFile = `${receiptFile()}.tmp`;
+    try { mkdirSync(dataDir(), { recursive: true }); writeFileSync(temporaryFile, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 }); renameSync(temporaryFile, receiptFile()); }
+    catch (error) { try { unlinkSync(temporaryFile); } catch { /* Keep the original error. */ } throw error; }
+    return next;
+  });
+  ipcMain.handle('koko:receipt-printers', async event => {
+    trusted(event);
+    const [windows, serial] = await Promise.all([listWindowsPrinters().catch(() => [] as string[]), listSerialPorts().catch(() => [] as string[])]);
+    return { windows, serial };
+  });
+  ipcMain.handle('koko:receipt-print', async (event, sessionId: unknown, captionValue: unknown) => {
+    trusted(event);
+    const settings = receiptSettings();
+    if (!settings.printer) throw new Error('Choose a receipt printer first');
+    const captionRaster = validCaption(captionValue);
+    if (sessionId === null || sessionId === undefined) {
+      await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster }));
+      return;
+    }
+    if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
+    if (!captureSessions().get(sessionId)) throw new Error('Capture session not found');
+    const accountShare = studioCloud().getShare(sessionId);
+    const share = accountShare
+      ? { shareUrl: accountShare.revoked ? null : accountShare.url, expiresAt: accountShare.expiresAt ?? null, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null }
+      : { ...photoCloud().getShareStatus(sessionId), shortCode: null, eventUrl: null };
+    if (!share.shareUrl) throw new Error('This round has no guest link yet. Upload it first.');
+    await sendReceipt(settings.printer, buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster }));
+  });
   ipcMain.handle('koko:slideshow-settings-get', event => { trusted(event); return slideshowSettings(); });
   ipcMain.handle('koko:slideshow-settings-save', (event, value: unknown) => {
     trusted(event);

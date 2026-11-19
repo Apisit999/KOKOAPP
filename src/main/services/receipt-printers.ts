@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { sendToNetworkPrinter } from './escpos-receipt.ts';
+import type { ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
+export type { ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
 
 /**
  * One way to reach any ESC/POS receipt printer, whatever the brand:
@@ -9,11 +11,6 @@ import { sendToNetworkPrinter } from './escpos-receipt.ts';
  *  - serial:   a COM port (RS-232, USB-serial, or a paired Bluetooth printer's "Outgoing" COM port)
  * The receipt bytes are identical for all three; only the way they travel differs.
  */
-export type ReceiptPrinterConfig =
-  | { kind: 'network'; host: string; port?: number }
-  | { kind: 'windows'; name: string }
-  | { kind: 'serial'; port: string; baud?: number };
-
 export type ExecFn = (file: string, args: string[], options: { input?: string; env?: Record<string, string>; timeoutMs: number }) => Promise<string>;
 
 const POWERSHELL = 'powershell.exe';

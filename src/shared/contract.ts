@@ -1,6 +1,10 @@
 import type { AccountLinkPollResult, AccountLinkStart, LicenseSnapshot, Plan } from './license-contract';
 import type { UpdateStatus } from './update-contract';
 import type { TemplateCount, TemplateSizeId } from './template-size';
+import type { ReceiptSettings } from './receipt-settings';
+export type { ReceiptSettings, ReceiptPrinterConfig } from './receipt-settings';
+/** A caption drawn by the app (so Thai prints on any model): 1 bit per dot, width a multiple of 8. */
+export type ReceiptCaptionImage = { width: number; height: number; data: Uint8Array };
 
 export type Language = 'th' | 'en';
 export type Settings = { language: Language; highContrast: boolean; fullscreen: boolean };
@@ -101,6 +105,11 @@ export type Bridge = {
   updateEvent(id: string, value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
+  getReceiptSettings(): Promise<ReceiptSettings>;
+  saveReceiptSettings(value: ReceiptSettings): Promise<ReceiptSettings>;
+  listReceiptPrinters(): Promise<{ windows: string[]; serial: string[] }>;
+  /** Prints the guest receipt of a session; with no session it prints a test receipt. */
+  printReceipt(sessionId: string | null, caption: ReceiptCaptionImage | null): Promise<void>;
   getSlideshowSettings(): Promise<SlideshowSettings>;
   saveSlideshowSettings(value: SlideshowSettings): Promise<SlideshowSettings>;
   getSlideshowPhotoIds(): Promise<{ settings: SlideshowSettings; ids: string[] }>;

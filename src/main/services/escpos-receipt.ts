@@ -3,8 +3,11 @@ import { Socket } from 'node:net';
 /**
  * Guest receipt as raw ESC/POS bytes: short, cheap and fast (no driver, no PDF).
  * The QR uses the printer's own QR command (GS ( k), which is sharper and faster than printing an image.
- * Text is ASCII only: Thai code pages differ between printer models, so Thai text needs the raster fallback (not built yet).
+ * Text is ASCII only: Thai code pages differ between printer models, so Thai text is drawn by the app as a 1-bit picture
+ * (`captionRaster`) and sent with the raster command, which every ESC/POS printer understands.
  */
+import { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from '../../shared/receipt-raster.ts';
+export { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, rasterFromRgba, type ReceiptRaster } from '../../shared/receipt-raster.ts';
 export type ReceiptInput = {
   shareUrl: string;
   shortCode?: string | null;
@@ -14,6 +17,8 @@ export type ReceiptInput = {
   eventName?: string | null;
   expiresAt?: string | null;
   paper?: 58 | 80;
+  /** Replaces the event name and the "Scan for your photos" line, so any language prints. */
+  captionRaster?: ReceiptRaster | null;
 };
 
 const ESC = 0x1b, GS = 0x1d, LF = 0x0a;
@@ -35,6 +40,21 @@ function qr(data: string, moduleSize: number) {
   ]);
 }
 
+/** GS v 0 in strips, so printers with small buffers do not drop rows. */
+export function rasterCommands(raster: ReceiptRaster): Buffer {
+  const { width, height, data } = raster;
+  if (!Number.isInteger(width) || width < 8 || width > RASTER_MAX_WIDTH || width % 8 !== 0) throw new Error('Invalid receipt image');
+  if (!Number.isInteger(height) || height < 1 || height > RASTER_MAX_HEIGHT) throw new Error('Invalid receipt image');
+  const rowBytes = width / 8;
+  if (data.length !== rowBytes * height) throw new Error('Invalid receipt image');
+  const strips: Buffer[] = [];
+  for (let y = 0; y < height; y += 128) {
+    const rows = Math.min(128, height - y);
+    strips.push(Buffer.from([GS, 0x76, 0x30, 0, rowBytes & 0xff, rowBytes >> 8, rows & 0xff, rows >> 8]), Buffer.from(data.subarray(y * rowBytes, (y + rows) * rowBytes)));
+  }
+  return Buffer.concat(strips);
+}
+
 /** "kokomemory.com/e/abc" is easier to type than the full https:// link. */
 const shortUrl = (value: string) => value.replace(/^https?:\/\//, '').replace(/\/+$/, '');
 
@@ -49,8 +69,12 @@ export function buildReceipt(input: ReceiptInput): Uint8Array {
     Buffer.from([ESC, 0x61, 1]), // centre
     Buffer.from([ESC, 0x45, 1, GS, 0x21, 0x11]), text('KOKO MEMORY'), Buffer.from([GS, 0x21, 0x00, ESC, 0x45, 0, LF]),
   ];
-  if (input.eventName && ascii(input.eventName)) parts.push(text(input.eventName.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));
-  parts.push(text('Scan for your photos'), Buffer.from([LF]), qr(input.shareUrl, paper === 58 ? 5 : 7), Buffer.from([LF]));
+  if (input.captionRaster) parts.push(rasterCommands(input.captionRaster));
+  else {
+    if (input.eventName && ascii(input.eventName)) parts.push(text(input.eventName.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));
+    parts.push(text('Scan for your photos'), Buffer.from([LF]));
+  }
+  parts.push(qr(input.shareUrl, paper === 58 ? 5 : 7), Buffer.from([LF]));
   if (input.shortCode && /^[2-9A-HJ-NP-Z]{8}$/.test(input.shortCode)) {
     parts.push(text('or enter code'), Buffer.from([LF, ESC, 0x45, 1, GS, 0x21, 0x01]), text(`${input.shortCode.slice(0, 4)} ${input.shortCode.slice(4)}`), Buffer.from([GS, 0x21, 0x00, ESC, 0x45, 0, LF]));
     if (input.eventUrl && ascii(input.eventUrl)) parts.push(text(`at ${shortUrl(input.eventUrl)}`.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));
