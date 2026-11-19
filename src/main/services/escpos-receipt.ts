@@ -1,4 +1,5 @@
 import { Socket } from 'node:net';
+import QRCode from 'qrcode';
 
 /**
  * Guest receipt as raw ESC/POS bytes: short, cheap and fast (no driver, no PDF).
@@ -27,6 +28,17 @@ const ascii = (value: string) => /^[\x20-\x7e]*$/.test(value);
 const text = (value: string) => Buffer.from(value.replace(/[^\x20-\x7e]/g, ''), 'ascii');
 
 /** Model 2, error correction M, module size chosen for the paper width. */
+/** Printable dots across the paper: 48 mm on 58 mm paper, 72 mm on 80 mm paper, at 203 dpi. */
+const PAPER_DOTS = { 58: 384, 80: 576 } as const;
+const PAPER_COLUMNS = { 58: 32, 80: 48 } as const;
+/** Starts from the preferred size and shrinks it until the code fits the paper; below 3 dots per module a phone cannot read it. */
+function fitModuleSize(data: string, paper: 58 | 80) {
+  const modules = QRCode.create(data, { errorCorrectionLevel: 'M' }).modules.size;
+  for (let size = paper === 58 ? 5 : 7; size >= 3; size--) if (modules * size <= PAPER_DOTS[paper]) return size;
+  throw new Error('This link is too long to print as a QR code on this paper');
+}
+/** Hard-wraps text to the paper width: a link or code must never be cut off. */
+const wrap = (value: string, columns: number) => value.match(new RegExp(`.{1,${columns}}`, 'g')) ?? [];
 function qr(data: string, moduleSize: number) {
   const payload = Buffer.from(data, 'ascii');
   if (payload.length < 1 || payload.length > MAX_QR_BYTES) throw new Error('QR data is too long for a receipt');
@@ -74,10 +86,10 @@ export function buildReceipt(input: ReceiptInput): Uint8Array {
     if (input.eventName && ascii(input.eventName)) parts.push(text(input.eventName.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));
     parts.push(text('Scan for your photos'), Buffer.from([LF]));
   }
-  parts.push(qr(input.shareUrl, paper === 58 ? 5 : 7), Buffer.from([LF]));
+  parts.push(qr(input.shareUrl, fitModuleSize(input.shareUrl, paper)), Buffer.from([LF]));
   if (input.shortCode && /^[2-9A-HJ-NP-Z]{8}$/.test(input.shortCode)) {
     parts.push(text('or enter code'), Buffer.from([LF, ESC, 0x45, 1, GS, 0x21, 0x01]), text(`${input.shortCode.slice(0, 4)} ${input.shortCode.slice(4)}`), Buffer.from([GS, 0x21, 0x00, ESC, 0x45, 0, LF]));
-    if (input.eventUrl && ascii(input.eventUrl)) parts.push(text(`at ${shortUrl(input.eventUrl)}`.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));
+    if (input.eventUrl && ascii(input.eventUrl)) for (const row of wrap(`at ${shortUrl(input.eventUrl)}`, PAPER_COLUMNS[paper])) parts.push(text(row), Buffer.from([LF]));
   }
   if (input.expiresAt && Number.isFinite(Date.parse(input.expiresAt))) {
     const date = new Date(input.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' });
