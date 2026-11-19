@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { ReceiptCaptionImage, ReceiptPrinterConfig, ReceiptSettings } from '../shared/contract';
+import type { PrinterStatus, ReceiptCaptionImage, ReceiptPrinterConfig, ReceiptSettings } from '../shared/contract';
 import { rasterFromRgba } from '../shared/receipt-raster';
-import { SERIAL_BAUD_RATES } from '../shared/receipt-settings';
+import { MAX_RECEIPT_COPIES, SERIAL_BAUD_RATES } from '../shared/receipt-settings';
 
 /** Printable width in dots at 203 dpi: 48 mm on 58 mm paper, 72 mm on 80 mm paper. */
 const PAPER_DOTS = { 58: 384, 80: 576 } as const;
@@ -58,12 +58,29 @@ export async function drawReceiptCaption(paper: 58 | 80, eventName: string | nul
   return rasterFromRgba(new Uint8Array(pixels.data.buffer, pixels.data.byteOffset, pixels.data.byteLength), width, height);
 }
 
-/** Prints the guest receipt for one round; with no session it prints a test receipt. */
-export async function printGuestReceipt(sessionId: string | null, eventName: string | null, th: boolean) {
+/**
+ * Prints the guest receipt for one round; with no session it prints a test receipt.
+ * The event name is printed only when the owner turned that on: it is often the customers' own names.
+ */
+export async function printGuestReceipt(sessionId: string | null, eventName: string | null, th: boolean, copies?: number) {
   const settings = await window.koko.getReceiptSettings();
   if (!settings.printer) throw new Error(th ? 'ยังไม่ได้ตั้งค่าเครื่องพิมพ์ใบเสร็จ' : 'No receipt printer is set up.');
-  const caption = await drawReceiptCaption(settings.paper, eventName, th);
-  await window.koko.printReceipt(sessionId, caption);
+  const caption = await drawReceiptCaption(settings.paper, settings.showEventName ? eventName : null, th);
+  await window.koko.printReceipt(sessionId, caption, copies);
+}
+
+/** Plain-language printer state for staff; "unknown" is normal for printers that do not report status. */
+export function describePrinterStatus(status: PrinterStatus, th: boolean): { ok: boolean; text: string } {
+  switch (status.state) {
+    case 'ok': return { ok: true, text: th ? 'เครื่องพิมพ์พร้อมใช้งาน' : 'Printer is ready' };
+    case 'paper-low': return { ok: true, text: th ? 'กระดาษใกล้หมด เตรียมม้วนใหม่' : 'Paper is running low. Have a new roll ready.' };
+    case 'paper-out': return { ok: false, text: th ? 'กระดาษหมด ใส่ม้วนใหม่' : 'Out of paper. Load a new roll.' };
+    case 'cover-open': return { ok: false, text: th ? 'ฝาเครื่องพิมพ์เปิดอยู่ ปิดฝาให้สนิท' : 'The printer cover is open. Close it firmly.' };
+    case 'offline': return { ok: false, text: th ? 'เครื่องพิมพ์ออฟไลน์ ตรวจสายและไฟ' : 'The printer is offline. Check the cable and power.' };
+    case 'error': return { ok: false, text: th ? 'เครื่องพิมพ์ขัดข้อง ปิดแล้วเปิดใหม่' : 'The printer reports an error. Switch it off and on again.' };
+    case 'unreachable': return { ok: false, text: th ? `ติดต่อเครื่องพิมพ์ไม่ได้ (${status.detail ?? 'ไม่ทราบสาเหตุ'})` : `Cannot reach the printer (${status.detail ?? 'unknown reason'}).` };
+    default: return { ok: true, text: status.detail === 'installed' || status.detail === 'present' ? (th ? 'พบเครื่องพิมพ์ในเครื่อง แต่รุ่นนี้ไม่รายงานสถานะกระดาษ ลองพิมพ์ใบทดสอบเพื่อยืนยัน' : 'The printer is present but does not report paper status. Print a test receipt to confirm.') : (th ? 'เครื่องพิมพ์ไม่รายงานสถานะ ลองพิมพ์ใบทดสอบเพื่อยืนยัน' : 'The printer does not report its status. Print a test receipt to confirm.') };
+  }
 }
 
 type Kind = 'none' | ReceiptPrinterConfig['kind'];
@@ -81,6 +98,12 @@ export function ReceiptSettingsBlock({ th, eventName }: { th: boolean; eventName
   async function save(next: ReceiptSettings) {
     try { setSettings(await window.koko.saveReceiptSettings(next)); setMessage(''); }
     catch (error) { setMessage(error instanceof Error ? error.message : (th ? 'บันทึกไม่สำเร็จ' : 'Could not save.')); }
+  }
+  async function checkStatus() {
+    setBusy(true); setMessage('');
+    try { const result = describePrinterStatus(await window.koko.getReceiptPrinterStatus(), th); setMessage(result.text); }
+    catch (error) { setMessage(error instanceof Error ? error.message : (th ? 'ตรวจสถานะไม่สำเร็จ' : 'Could not check the printer.')); }
+    finally { setBusy(false); }
   }
   async function test() {
     setBusy(true); setMessage('');
@@ -119,8 +142,10 @@ export function ReceiptSettingsBlock({ th, eventName }: { th: boolean; eventName
         <select value={printer.baud ?? 9600} onChange={event => void save({ ...settings, printer: { ...printer, baud: Number(event.target.value) } })}>{SERIAL_BAUD_RATES.map(rate => <option key={rate} value={rate}>{rate}</option>)}</select></div></div>}
     {printer && <>
       <div className="setting-row"><span>{th ? 'ขนาดกระดาษ' : 'Paper width'}</span><div className="segmented-control" role="group" aria-label={th ? 'ขนาดกระดาษ' : 'Paper width'}>{([58, 80] as const).map(paper => <button key={paper} type="button" className={settings.paper === paper ? 'active' : ''} aria-pressed={settings.paper === paper} onClick={() => void save({ ...settings, paper })}>{paper} mm</button>)}</div></div>
+      <div className="setting-row"><span>{th ? 'จำนวนใบต่อรอบ' : 'Slips per round'}</span><div className="segmented-control" role="group" aria-label={th ? 'จำนวนใบต่อรอบ' : 'Slips per round'}><button type="button" aria-label={th ? 'ลดจำนวนใบ' : 'Fewer slips'} onClick={() => void save({ ...settings, copies: Math.max(1, settings.copies - 1) })}>−</button><button type="button" className="active" aria-live="polite">{settings.copies}</button><button type="button" aria-label={th ? 'เพิ่มจำนวนใบ' : 'More slips'} onClick={() => void save({ ...settings, copies: Math.min(MAX_RECEIPT_COPIES, settings.copies + 1) })}>+</button></div><small>{th ? 'ค่าเริ่มต้น 1 ใบต่อกลุ่ม พนักงานเพิ่มได้ตอนพิมพ์แต่ละรอบ' : 'Default is one slip per group. Staff can add more when printing a round.'}</small></div>
+      <label className="audio-toggle"><input type="checkbox" checked={settings.showEventName} onChange={event => void save({ ...settings, showEventName: event.target.checked })} /><small>{th ? 'พิมพ์ชื่องานบนใบเสร็จ (ปิดไว้เพื่อความเป็นส่วนตัว เพราะชื่องานมักเป็นชื่อลูกค้า)' : 'Print the event name on the slip (off by default for privacy: event names are often the names of the customers)'}</small></label>
       <label className="audio-toggle"><input type="checkbox" checked={settings.autoPrint} onChange={event => void save({ ...settings, autoPrint: event.target.checked })} /><small>{th ? 'พิมพ์ใบเสร็จอัตโนมัติเมื่อถ่ายเสร็จแต่ละรอบ' : 'Print a receipt automatically after each round'}</small></label>
-      <div><button type="button" onClick={() => void test()} disabled={busy}>{busy ? (th ? 'กำลังพิมพ์…' : 'Printing…') : (th ? 'พิมพ์ใบทดสอบ' : 'Print a test receipt')}</button></div>
+      <div><button type="button" onClick={() => void checkStatus()} disabled={busy}>{th ? 'ตรวจสถานะเครื่องพิมพ์' : 'Check printer status'}</button>{' '}<button type="button" onClick={() => void test()} disabled={busy}>{busy ? (th ? 'กำลังพิมพ์…' : 'Printing…') : (th ? 'พิมพ์ใบทดสอบ' : 'Print a test receipt')}</button></div>
     </>}
     {message && <p role="status">{message}</p>}
   </section>;

@@ -5,8 +5,18 @@ export type ReceiptPrinterConfig =
   | { kind: 'windows'; name: string }
   | { kind: 'serial'; port: string; baud?: number };
 
-export type ReceiptSettings = { paper: 58 | 80; autoPrint: boolean; printer: ReceiptPrinterConfig | null };
-export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = { paper: 58, autoPrint: false, printer: null };
+export type ReceiptSettings = {
+  paper: 58 | 80;
+  autoPrint: boolean;
+  printer: ReceiptPrinterConfig | null;
+  /** Off by default: event names are often the customers' names, and the receipt must not carry them. */
+  showEventName: boolean;
+  /** Slips per round: 1 per group by default; staff can raise it per round. */
+  copies: number;
+};
+export const MAX_RECEIPT_COPIES = 10;
+export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = { paper: 58, autoPrint: false, printer: null, showEventName: false, copies: 1 };
+export const clampReceiptCopies = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? Math.min(MAX_RECEIPT_COPIES, Math.max(1, value)) : 1;
 export const SERIAL_BAUD_RATES = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200] as const;
 
 export function normalizeReceiptPrinter(value: unknown): ReceiptPrinterConfig | null {
@@ -31,5 +41,8 @@ export function normalizeReceiptPrinter(value: unknown): ReceiptPrinterConfig | 
 export function normalizeReceiptSettings(value: unknown): ReceiptSettings {
   const item = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
   const printer = normalizeReceiptPrinter(item.printer);
-  return { paper: item.paper === 80 ? 80 : 58, autoPrint: item.autoPrint === true && printer !== null, printer };
+  return { paper: item.paper === 80 ? 80 : 58, autoPrint: item.autoPrint === true && printer !== null, printer, showEventName: item.showEventName === true, copies: clampReceiptCopies(item.copies) };
 }
+
+/** Result of asking a receipt printer how it is doing. */
+export type PrinterStatus = { state: 'ok' | 'paper-out' | 'paper-low' | 'cover-open' | 'offline' | 'error' | 'unknown' | 'unreachable'; detail?: string };

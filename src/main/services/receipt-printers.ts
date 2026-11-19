@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
+import { Socket } from 'node:net';
 import { sendToNetworkPrinter } from './escpos-receipt.ts';
-import type { ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
-export type { ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
+import type { PrinterStatus, ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
+export type { PrinterStatus, ReceiptPrinterConfig } from '../../shared/receipt-settings.ts';
 
 /**
  * One way to reach any ESC/POS receipt printer, whatever the brand:
@@ -101,4 +102,48 @@ export function sendReceipt(config: ReceiptPrinterConfig, bytes: Uint8Array): Pr
     case 'serial': return sendToSerialPrinter(config.port, bytes, { baud: config.baud });
     default: return Promise.reject(new Error('Unknown receipt printer type'));
   }
+}
+
+/**
+ * Printer health from the real-time status commands (DLE EOT 1, 2 and 4), which standard ESC/POS printers answer with one byte each.
+ * Only network printers can be asked: a Windows queue or COM port gives no reply path that is the same on every model.
+ */
+
+/** `replies` holds the answers to DLE EOT 1, 2 and 4, in that order. Fewer than three bytes means the printer does not report status. */
+export function parsePrinterStatus(replies: Uint8Array): PrinterStatus {
+  if (replies.length < 3) return { state: 'unknown' };
+  const [printer, offline, paper] = replies;
+  if (paper & 0x60) return { state: 'paper-out' };
+  if (offline & 0x04) return { state: 'cover-open' };
+  if (offline & 0x40) return { state: 'error' };
+  if (offline & 0x20) return { state: 'paper-out' };
+  if (printer & 0x08) return { state: 'offline' };
+  if (paper & 0x0c) return { state: 'paper-low' };
+  return { state: 'ok' };
+}
+
+export function queryNetworkPrinterStatus(host: string, options: { port?: number; timeoutMs?: number } = {}): Promise<PrinterStatus> {
+  const port = options.port ?? 9100;
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.reject(new Error('Invalid printer address'));
+  return new Promise(resolve => {
+    const socket = new Socket();
+    const received: number[] = [];
+    let settled = false;
+    const finish = (status?: PrinterStatus) => { if (settled) return; settled = true; socket.destroy(); resolve(status ?? parsePrinterStatus(Uint8Array.from(received))); };
+    const timeout = options.timeoutMs ?? 2000;
+    socket.setTimeout(timeout, () => finish(received.length ? undefined : { state: 'unknown' }));
+    socket.once('error', error => finish({ state: 'unreachable', detail: error.message }));
+    socket.on('data', chunk => { received.push(...chunk); if (received.length >= 3) finish(); });
+    socket.connect(port, host, () => socket.write(Buffer.from([0x10, 0x04, 0x01, 0x10, 0x04, 0x02, 0x10, 0x04, 0x04])));
+  });
+}
+
+export async function getReceiptPrinterStatus(config: ReceiptPrinterConfig): Promise<PrinterStatus> {
+  if (config.kind === 'network') return queryNetworkPrinterStatus(config.host, { port: config.port });
+  if (config.kind === 'windows') {
+    try { return (await listWindowsPrinters()).includes(config.name) ? { state: 'unknown', detail: 'installed' } : { state: 'unreachable', detail: 'Printer is not installed in Windows' }; }
+    catch (error) { return { state: 'unknown', detail: error instanceof Error ? error.message : undefined }; }
+  }
+  try { return (await listSerialPorts()).includes(config.port) ? { state: 'unknown', detail: 'present' } : { state: 'unreachable', detail: `${config.port} is not available` }; }
+  catch (error) { return { state: 'unknown', detail: error instanceof Error ? error.message : undefined }; }
 }

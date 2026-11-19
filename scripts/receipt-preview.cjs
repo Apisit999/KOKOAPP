@@ -1,5 +1,5 @@
 // Shows the guest receipt the way a printer would put it on paper, without a printer.
-// Usage: node scripts/receipt-preview.cjs [--paper 58|80] [--event "Event name"] [--lang th|en] [--out receipt.png] [--url https://...]
+// Usage: node scripts/receipt-preview.cjs [--paper 58|80] [--event "Event name" (optional: off by default)] [--lang th|en] [--out receipt.png] [--url https://...]
 // It builds the receipt with the app's own code, runs the bytes through a virtual ESC/POS printer, draws the result in
 // Microsoft Edge (headless) and tries to read the printed QR code back with the browser's barcode detector.
 const { spawn } = require('node:child_process');
@@ -12,7 +12,8 @@ const { emulate } = require('../tests/helpers/escpos-emulator.cjs');
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => (value.startsWith('--') ? [...pairs, [value.slice(2), all[index + 1]]] : pairs), []));
 const paper = args.paper === '80' ? 80 : 58;
 const lang = args.lang === 'en' ? 'en' : 'th';
-const eventName = args.event ?? (lang === 'th' ? 'งานแต่งคุณสมชายและคุณสมหญิง ณ โรงแรมริมแม่น้ำ' : 'Somchai & Somying Wedding');
+// Like the app, the event name is left off unless asked for (--event): it is often the customers' own names.
+const eventName = args.event ?? null;
 const shareUrl = args.url ?? `https://kokomemory.com/s/${'A1b2C3d4'.repeat(5)}xyz?openExternalBrowser=1`;
 const out = path.resolve(args.out ?? 'receipt-preview.png');
 const EDGE = process.env.EDGE_PATH ?? [
@@ -22,7 +23,7 @@ if (!EDGE) { console.error('Microsoft Edge was not found. Set EDGE_PATH to a Chr
 
 const DRAW_CAPTION = `(async (width, size, name, caption) => {
   const FONT = "'IBM Plex Sans Thai','Noto Sans Thai','Leelawadee UI',Tahoma,'Segoe UI',sans-serif";
-  const lines = [{ text: name, size: size + 2, weight: 600 }, { text: caption, size, weight: 400 }];
+  const lines = [...(name ? [{ text: name, size: size + 2, weight: 600 }] : []), { text: caption, size, weight: 400 }];
   const canvas = document.createElement('canvas'); const x = canvas.getContext('2d', { willReadFrequently: true });
   const font = line => line.weight + ' ' + line.size + 'px ' + FONT; const wrapped = [];
   for (const line of lines) {

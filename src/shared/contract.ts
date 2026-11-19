@@ -2,7 +2,8 @@ import type { AccountLinkPollResult, AccountLinkStart, LicenseSnapshot, Plan } f
 import type { UpdateStatus } from './update-contract';
 import type { TemplateCount, TemplateSizeId } from './template-size';
 import type { ReceiptSettings } from './receipt-settings';
-export type { ReceiptSettings, ReceiptPrinterConfig } from './receipt-settings';
+export type { ReceiptSettings, ReceiptPrinterConfig, PrinterStatus } from './receipt-settings';
+import type { PrinterStatus } from './receipt-settings';
 /** A caption drawn by the app (so Thai prints on any model): 1 bit per dot, width a multiple of 8. */
 export type ReceiptCaptionImage = { width: number; height: number; data: Uint8Array };
 
@@ -109,7 +110,9 @@ export type Bridge = {
   saveReceiptSettings(value: ReceiptSettings): Promise<ReceiptSettings>;
   listReceiptPrinters(): Promise<{ windows: string[]; serial: string[] }>;
   /** Prints the guest receipt of a session; with no session it prints a test receipt. */
-  printReceipt(sessionId: string | null, caption: ReceiptCaptionImage | null): Promise<void>;
+  printReceipt(sessionId: string | null, caption: ReceiptCaptionImage | null, copies?: number): Promise<void>;
+  /** Asks the chosen receipt printer for paper, cover and offline state (full detail only for LAN printers). */
+  getReceiptPrinterStatus(): Promise<PrinterStatus>;
   getSlideshowSettings(): Promise<SlideshowSettings>;
   saveSlideshowSettings(value: SlideshowSettings): Promise<SlideshowSettings>;
   getSlideshowPhotoIds(): Promise<{ settings: SlideshowSettings; ids: string[] }>;

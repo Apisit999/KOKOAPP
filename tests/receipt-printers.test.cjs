@@ -46,3 +46,30 @@ test('sendReceipt: unknown printer types are rejected', async () => {
 test('windows printer (real PowerShell): the raw-print script compiles and fails cleanly for a printer that does not exist', { skip: process.platform !== 'win32' }, async () => {
   await assert.rejects(sendToWindowsPrinter('KOKO-NO-SUCH-PRINTER-9f3', bytes), /Could not open printer/);
 });
+
+test('printer status: the three status bytes map to paper out, cover open, offline, low paper or ok; no answer means unknown', () => {
+  const { parsePrinterStatus } = require('../src/main/services/receipt-printers.ts');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12, 0x12, 0x12)).state, 'ok');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12, 0x12, 0x72)).state, 'paper-out');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12, 0x12, 0x1e)).state, 'paper-low');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12, 0x16, 0x12)).state, 'cover-open');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12, 0x52, 0x12)).state, 'error');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x1a, 0x12, 0x12)).state, 'offline');
+  assert.equal(parsePrinterStatus(Uint8Array.of(0x12)).state, 'unknown');
+});
+
+test('printer status over a socket: a fake printer that answers, one that stays silent, and one that is not there', async () => {
+  const { createServer } = require('node:net');
+  const { queryNetworkPrinterStatus } = require('../src/main/services/receipt-printers.ts');
+  let asked = Buffer.alloc(0);
+  const talker = createServer(socket => socket.on('data', chunk => { asked = Buffer.concat([asked, chunk]); if (asked.length >= 9) socket.write(Buffer.from([0x12, 0x12, 0x72])); }));
+  const mute = createServer(() => undefined);
+  await Promise.all([new Promise(r => talker.listen(0, '127.0.0.1', r)), new Promise(r => mute.listen(0, '127.0.0.1', r))]);
+  try {
+    assert.equal((await queryNetworkPrinterStatus('127.0.0.1', { port: talker.address().port })).state, 'paper-out');
+    assert.deepEqual([...asked], [0x10, 0x04, 0x01, 0x10, 0x04, 0x02, 0x10, 0x04, 0x04]);
+    assert.equal((await queryNetworkPrinterStatus('127.0.0.1', { port: mute.address().port, timeoutMs: 200 })).state, 'unknown');
+    const closed = createServer(); await new Promise(r => closed.listen(0, '127.0.0.1', r)); const port = closed.address().port; await new Promise(r => closed.close(r));
+    assert.equal((await queryNetworkPrinterStatus('127.0.0.1', { port, timeoutMs: 500 })).state, 'unreachable');
+  } finally { talker.close(); mute.close(); }
+});

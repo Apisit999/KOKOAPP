@@ -9,9 +9,9 @@ import { PhotoStore, validateStorageRoot } from './services/photo-store';
 import { VideoStore } from './services/video-store';
 import { FontStore, MAX_FONT_BYTES } from './services/font-store';
 import { normalizeSlideshowSettings, pickSlideshowPhotoIds } from '../shared/slideshow';
-import { normalizeReceiptSettings } from '../shared/receipt-settings';
+import { clampReceiptCopies, normalizeReceiptSettings } from '../shared/receipt-settings';
 import { buildReceipt, RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from './services/escpos-receipt';
-import { listSerialPorts, listWindowsPrinters, sendReceipt } from './services/receipt-printers';
+import { getReceiptPrinterStatus, listSerialPorts, listWindowsPrinters, sendReceipt } from './services/receipt-printers';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
 import { LicenseRuntime } from './services/license-runtime';
@@ -725,11 +725,20 @@ app.on('ready', () => {
     const [windows, serial] = await Promise.all([listWindowsPrinters().catch(() => [] as string[]), listSerialPorts().catch(() => [] as string[])]);
     return { windows, serial };
   });
-  ipcMain.handle('koko:receipt-print', async (event, sessionId: unknown, captionValue: unknown) => {
+  ipcMain.handle('koko:receipt-status', async event => {
+    trusted(event);
+    const settings = receiptSettings();
+    if (!settings.printer) throw new Error('Choose a receipt printer first');
+    return getReceiptPrinterStatus(settings.printer);
+  });
+  ipcMain.handle('koko:receipt-print', async (event, sessionId: unknown, captionValue: unknown, copiesValue: unknown) => {
     trusted(event);
     const settings = receiptSettings();
     if (!settings.printer) throw new Error('Choose a receipt printer first');
     const captionRaster = validCaption(captionValue);
+    const copies = copiesValue === undefined || copiesValue === null ? settings.copies : clampReceiptCopies(copiesValue);
+    /** One job with the slip repeated: each copy ends with its own cut. */
+    const repeat = (bytes: Uint8Array) => copies === 1 ? bytes : Buffer.concat(Array.from({ length: copies }, () => Buffer.from(bytes)));
     if (sessionId === null || sessionId === undefined) {
       await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster }));
       return;
@@ -741,7 +750,7 @@ app.on('ready', () => {
       ? { shareUrl: accountShare.revoked ? null : accountShare.url, expiresAt: accountShare.expiresAt ?? null, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null }
       : { ...photoCloud().getShareStatus(sessionId), shortCode: null, eventUrl: null };
     if (!share.shareUrl) throw new Error('This round has no guest link yet. Upload it first.');
-    await sendReceipt(settings.printer, buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster }));
+    await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster })));
   });
   ipcMain.handle('koko:slideshow-settings-get', event => { trusted(event); return slideshowSettings(); });
   ipcMain.handle('koko:slideshow-settings-save', (event, value: unknown) => {
