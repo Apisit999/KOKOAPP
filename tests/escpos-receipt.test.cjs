@@ -92,3 +92,55 @@ test('receipt: the event message picture prints under the validity line and befo
   assert.deepEqual([...bytes.subarray(-4)], [0x1d, 0x56, 0x42, 3], 'still ends with the cut');
   assert.ok(!Buffer.from(buildReceipt({ shareUrl: URL })).includes(Buffer.from([0x1d, 0x76, 0x30])), 'no picture when there is no message');
 });
+
+test('raster: a logo is centred on a strip as wide as the paper (or cropped if too wide), never distorted', () => {
+  const { padRasterToWidth } = require('../src/shared/receipt-raster.ts');
+  const logo = { width: 16, height: 2, data: new Uint8Array([0xff, 0xff, 0x81, 0x81]) };
+  const padded = padRasterToWidth(logo, 48);
+  assert.equal(padded.width, 48);
+  assert.deepEqual([...padded.data], [0, 0, 0xff, 0xff, 0, 0, 0, 0, 0x81, 0x81, 0, 0], 'two bytes centred in six: two blank bytes each side');
+  assert.equal(padRasterToWidth(logo, 16), logo, 'exact width is returned as it is');
+  const wide = { width: 24, height: 1, data: new Uint8Array([0x11, 0xff, 0x22]) };
+  assert.deepEqual([...padRasterToWidth(wide, 8).data], [0xff], 'the middle byte survives a crop to 8 dots');
+  assert.throws(() => padRasterToWidth(logo, 10), /Invalid receipt image/);
+});
+
+test('logo: BGRA with premultiplied alpha becomes straight RGBA; fully transparent pixels turn white', () => {
+  const { rgbaFromPremultipliedBgra, rasterFromRgba } = require('../src/shared/receipt-raster.ts');
+  // black opaque, red half-transparent (premultiplied: 128 in the red slot), fully transparent
+  const rgba = rgbaFromPremultipliedBgra(Uint8Array.from([0, 0, 0, 255, 0, 0, 128, 128, 0, 0, 0, 0]));
+  assert.deepEqual([...rgba], [0, 0, 0, 255, 255, 0, 0, 128, 255, 255, 255, 0]);
+  const raster = rasterFromRgba(rgba, 3, 1);
+  assert.equal(raster.data[0] & 0x80, 0x80, 'the opaque black pixel is a dot');
+  assert.equal(raster.data[0] & 0x20, 0, 'the transparent pixel stays blank');
+  assert.throws(() => rgbaFromPremultipliedBgra(Uint8Array.from([1, 2, 3])), /Invalid receipt image/);
+});
+
+test('receipt: a logo replaces the text heading, is as wide as the paper, and comes before the QR', () => {
+  const { buildReceipt } = require('../src/main/services/escpos-receipt.ts');
+  const { emulate } = require('./helpers/escpos-emulator.cjs');
+  for (const paper of [58, 80]) {
+    const dots = paper === 58 ? 384 : 576;
+    const result = emulate(buildReceipt({ shareUrl: URL, paper, logoRaster: { width: 64, height: 10, data: new Uint8Array(8 * 10).fill(0xf0) } }), { paperDots: dots });
+    assert.deepEqual(result.problems, []);
+    const kinds = result.items.filter(item => item.type === 'raster' || item.type === 'qr' || item.type === 'text').map(item => item.type + (item.text ? ':' + item.text.trim() : ''));
+    assert.deepEqual(kinds.slice(0, 3), ['raster', 'text:Scan for your photos', 'qr'], 'no KOKO MEMORY text, logo first, then the caption and the QR');
+    assert.equal(result.items.find(item => item.type === 'raster').width, dots);
+  }
+  assert.ok(emulate(buildReceipt({ shareUrl: URL })).items.some(item => item.type === 'text' && item.text.includes('KOKO MEMORY')), 'plain heading without a logo');
+});
+
+test('logo: a mostly dark picture is detected and can be flipped to dark marks on white', () => {
+  const { rasterFromRgba, darkRatio, LOGO_INVERT_ABOVE } = require('../src/shared/receipt-raster.ts');
+  const black = [0, 0, 0, 255], white = [255, 255, 255, 255];
+  const mostlyDark = Uint8Array.from([black, black, black, white].flat());
+  assert.equal(darkRatio(mostlyDark), 0.75);
+  assert.ok(darkRatio(mostlyDark) > LOGO_INVERT_ABOVE);
+  assert.ok(darkRatio(Uint8Array.from([black, white, white, white].flat())) < LOGO_INVERT_ABOVE);
+  assert.equal(darkRatio(Uint8Array.from([0, 0, 0, 0])), 0, 'transparent counts as white');
+  const normal = rasterFromRgba(mostlyDark, 4, 1);
+  const flipped = rasterFromRgba(mostlyDark, 4, 1, 140, true);
+  assert.equal(normal.data[0] & 0xf0, 0xe0, 'three dots black');
+  assert.equal(flipped.data[0] & 0xf0, 0x10, 'only the light dot is black after flipping');
+  assert.equal(flipped.data[0] & 0x0f, 0, 'padding columns never turn black');
+});

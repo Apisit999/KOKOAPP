@@ -114,6 +114,11 @@ export type Bridge = {
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
   getBoothStatus(): Promise<BoothStatus>;
+  /** The black-and-white logo printed at the top of the guest receipt, or null for the plain text heading. */
+  getReceiptLogo(): Promise<ReceiptCaptionImage | null>;
+  /** Asks for an image file, shrinks it to fit the receipt and stores it. Resolves null when the window is cancelled. */
+  importReceiptLogo(): Promise<{ image: ReceiptCaptionImage; inverted: boolean } | null>;
+  clearReceiptLogo(): Promise<boolean>;
   getReceiptSettings(): Promise<ReceiptSettings>;
   saveReceiptSettings(value: ReceiptSettings): Promise<ReceiptSettings>;
   listReceiptPrinters(): Promise<{ windows: string[]; serial: string[] }>;

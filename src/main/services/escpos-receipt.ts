@@ -7,8 +7,8 @@ import QRCode from 'qrcode';
  * Text is ASCII only: Thai code pages differ between printer models, so Thai text is drawn by the app as a 1-bit picture
  * (`captionRaster`) and sent with the raster command, which every ESC/POS printer understands.
  */
-import { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from '../../shared/receipt-raster.ts';
-export { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, rasterFromRgba, type ReceiptRaster } from '../../shared/receipt-raster.ts';
+import { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, padRasterToWidth, type ReceiptRaster } from '../../shared/receipt-raster.ts';
+export { RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, rasterFromRgba, padRasterToWidth, type ReceiptRaster } from '../../shared/receipt-raster.ts';
 export type ReceiptInput = {
   shareUrl: string;
   shortCode?: string | null;
@@ -22,6 +22,8 @@ export type ReceiptInput = {
   captionRaster?: ReceiptRaster | null;
   /** A short message under the validity line, drawn by the app so Thai prints on any model. */
   footerRaster?: ReceiptRaster | null;
+  /** The brand logo (black and white); replaces the "KOKO MEMORY" heading when set. */
+  logoRaster?: ReceiptRaster | null;
 };
 
 const ESC = 0x1b, GS = 0x1d, LF = 0x0a;
@@ -81,8 +83,9 @@ export function buildReceipt(input: ReceiptInput): Uint8Array {
   const parts: Buffer[] = [
     Buffer.from([ESC, 0x40]), // reset
     Buffer.from([ESC, 0x61, 1]), // centre
-    Buffer.from([ESC, 0x45, 1, GS, 0x21, 0x11]), text('KOKO MEMORY'), Buffer.from([GS, 0x21, 0x00, ESC, 0x45, 0, LF]),
   ];
+  if (input.logoRaster) parts.push(rasterCommands(padRasterToWidth(input.logoRaster, PAPER_DOTS[paper])), Buffer.from([LF]));
+  else parts.push(Buffer.from([ESC, 0x45, 1, GS, 0x21, 0x11]), text('KOKO MEMORY'), Buffer.from([GS, 0x21, 0x00, ESC, 0x45, 0, LF]));
   if (input.captionRaster) parts.push(rasterCommands(input.captionRaster));
   else {
     if (input.eventName && ascii(input.eventName)) parts.push(text(input.eventName.slice(0, paper === 58 ? 32 : 48)), Buffer.from([LF]));

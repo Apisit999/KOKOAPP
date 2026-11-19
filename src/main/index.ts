@@ -10,7 +10,8 @@ import { VideoStore } from './services/video-store';
 import { FontStore, MAX_FONT_BYTES } from './services/font-store';
 import { normalizeSlideshowSettings, pickSlideshowPhotoIds } from '../shared/slideshow';
 import { clampReceiptCopies, normalizeReceiptSettings } from '../shared/receipt-settings';
-import { buildReceipt, RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from './services/escpos-receipt';
+import { buildReceipt, rasterFromRgba, RASTER_MAX_HEIGHT, RASTER_MAX_WIDTH, type ReceiptRaster } from './services/escpos-receipt';
+import { darkRatio, LOGO_INVERT_ABOVE, rgbaFromPremultipliedBgra } from '../shared/receipt-raster';
 import { getReceiptPrinterStatus, listSerialPorts, listWindowsPrinters, sendReceipt } from './services/receipt-printers';
 import { EventStore } from './services/event-store';
 import { jpegDimensions } from './services/jpeg-image';
@@ -80,6 +81,10 @@ const settingsFile = () => path.join(dataDir(), 'settings.json');
 const guestModeFile = () => path.join(dataDir(), 'guest-mode.json');
 const slideshowFile = () => path.join(dataDir(), 'slideshow.json');
 const receiptFile = () => path.join(dataDir(), 'receipt-printer.json');
+const receiptLogoFile = () => path.join(dataDir(), 'receipt-logo.json');
+/** The logo is printed above the QR, so it is kept small: at most 384 dots wide (the narrow paper) and 160 dots tall. */
+const LOGO_MAX_WIDTH = 384;
+const LOGO_MAX_HEIGHT = 160;
 const photoStorageConfigFile = () => path.join(dataDir(), 'photo-storage.json');
 const cameraFolderConfigFile = () => path.join(dataDir(), 'camera-folder.json');
 const photoStores = new Map<string, PhotoStore>();
@@ -757,6 +762,45 @@ app.on('ready', () => {
       receiptPrinter: { configured: receiptSettings().printer !== null }
     };
   });
+  const readReceiptLogo = (): ReceiptRaster | null => {
+    try {
+      const value = JSON.parse(readFileSync(receiptLogoFile(), 'utf8')) as { width?: unknown; height?: unknown; data?: unknown };
+      if (typeof value.width !== 'number' || typeof value.height !== 'number' || typeof value.data !== 'string') return null;
+      const data = Uint8Array.from(Buffer.from(value.data, 'base64'));
+      if (value.width % 8 !== 0 || value.width < 8 || value.width > LOGO_MAX_WIDTH || value.height < 1 || value.height > LOGO_MAX_HEIGHT || data.length !== (value.width / 8) * value.height) return null;
+      return { width: value.width, height: value.height, data };
+    } catch { return null; }
+  };
+  ipcMain.handle('koko:receipt-logo-get', event => { trusted(event); return readReceiptLogo(); });
+  ipcMain.handle('koko:receipt-logo-clear', event => {
+    trusted(event);
+    try { unlinkSync(receiptLogoFile()); } catch { /* Already gone. */ }
+    return true;
+  });
+  ipcMain.handle('koko:receipt-logo-import', async event => {
+    trusted(event);
+    if (!mainWindow) throw new Error('Application window is unavailable.');
+    const choice = await dialog.showOpenDialog(mainWindow, { title: 'Choose the logo for the receipt', properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif'] }] });
+    if (choice.canceled || !choice.filePaths[0]) return null;
+    const selected = choice.filePaths[0];
+    const metadata = lstatSync(selected);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 8 * 1024 * 1024) throw new Error('Choose a regular image file smaller than 8 MB.');
+    let image = nativeImage.createFromPath(selected);
+    if (image.isEmpty()) throw new Error('That file could not be read as an image.');
+    const size = image.getSize();
+    // Never enlarge: a small logo stays sharp. Shrink to fit the width, then the height, keeping the proportions.
+    if (size.width > LOGO_MAX_WIDTH) image = image.resize({ width: LOGO_MAX_WIDTH, quality: 'best' });
+    if (image.getSize().height > LOGO_MAX_HEIGHT) image = image.resize({ height: LOGO_MAX_HEIGHT, quality: 'best' });
+    const { width, height } = image.getSize();
+    const rgba = rgbaFromPremultipliedBgra(image.toBitmap());
+    // A mostly dark logo would print as a heavy black block: flip it to dark marks on white paper.
+    const inverted = darkRatio(rgba, 160) > LOGO_INVERT_ABOVE;
+    const raster = rasterFromRgba(rgba, width, height, 160, inverted);
+    const temporaryFile = `${receiptLogoFile()}.tmp`;
+    try { mkdirSync(dataDir(), { recursive: true }); writeFileSync(temporaryFile, JSON.stringify({ width: raster.width, height: raster.height, data: Buffer.from(raster.data).toString('base64') }), { encoding: 'utf8', mode: 0o600 }); renameSync(temporaryFile, receiptLogoFile()); }
+    catch (error) { try { unlinkSync(temporaryFile); } catch { /* Keep the original error. */ } throw error; }
+    return { image: raster, inverted };
+  });
   ipcMain.handle('koko:receipt-settings-get', event => { trusted(event); return receiptSettings(); });
   ipcMain.handle('koko:receipt-settings-save', (event, value: unknown) => {
     trusted(event);
@@ -787,7 +831,7 @@ app.on('ready', () => {
     /** One job with the slip repeated: each copy ends with its own cut. */
     const repeat = (bytes: Uint8Array) => copies === 1 ? bytes : Buffer.concat(Array.from({ length: copies }, () => Buffer.from(bytes)));
     if (sessionId === null || sessionId === undefined) {
-      await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster, footerRaster }));
+      await sendReceipt(settings.printer, buildReceipt({ shareUrl: 'https://kokomemory.com/s/TEST', shortCode: 'ABCD2345', paper: settings.paper, captionRaster, footerRaster, logoRaster: readReceiptLogo() }));
       return;
     }
     if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid capture session ID');
@@ -797,7 +841,7 @@ app.on('ready', () => {
       ? { shareUrl: accountShare.revoked ? null : accountShare.url, expiresAt: accountShare.expiresAt ?? null, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null }
       : { ...photoCloud().getShareStatus(sessionId), shortCode: null, eventUrl: null };
     if (!share.shareUrl) throw new Error('This round has no guest link yet. Upload it first.');
-    await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster, footerRaster })));
+    await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster, footerRaster, logoRaster: readReceiptLogo() })));
   });
   ipcMain.handle('koko:slideshow-settings-get', event => { trusted(event); return slideshowSettings(); });
   ipcMain.handle('koko:slideshow-settings-save', (event, value: unknown) => {

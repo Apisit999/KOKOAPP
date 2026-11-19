@@ -1,5 +1,5 @@
 // Shows the guest receipt the way a printer would put it on paper, without a printer.
-// Usage: node scripts/receipt-preview.cjs [--message "Thank you"] [--paper 58|80] [--event "Event name" (optional: off by default)] [--lang th|en] [--out receipt.png] [--url https://...]
+// Usage: node scripts/receipt-preview.cjs [--logo logo.png] [--message "Thank you"] [--paper 58|80] [--event "Event name" (optional: off by default)] [--lang th|en] [--out receipt.png] [--url https://...]
 // It builds the receipt with the app's own code, runs the bytes through a virtual ESC/POS printer, draws the result in
 // Microsoft Edge (headless) and tries to read the printed QR code back with the browser's barcode detector.
 const { spawn } = require('node:child_process');
@@ -16,6 +16,8 @@ const lang = args.lang === 'en' ? 'en' : 'th';
 const eventName = args.event ?? null;
 // --message: the event's own thank-you line under the validity date (Thai is fine).
 const message = args.message ?? null;
+// --logo: an image file, shrunk and reduced to black and white like the app does (at most 384 x 160 dots).
+const logoFile = args.logo ? path.resolve(args.logo) : null;
 const shareUrl = args.url ?? `https://kokomemory.com/s/${'A1b2C3d4'.repeat(5)}xyz?openExternalBrowser=1`;
 const out = path.resolve(args.out ?? 'receipt-preview.png');
 const EDGE = process.env.EDGE_PATH ?? [
@@ -43,6 +45,15 @@ const DRAW_CAPTION = `(async (width, size, name, caption) => {
   let y = 6; for (const line of wrapped) { const row = Math.round(line.size * 1.7); x.font = font(line); x.fillText(line.text, width / 2, y + row / 2); y += row; }
   const rgba = Array.from(x.getImageData(0, 0, width, height).data);
   return { width, height, rgba };
+})`;
+
+const DRAW_LOGO = `(async dataUrl => {
+  const image = new Image(); image.src = dataUrl; await image.decode();
+  const scale = Math.min(1, 384 / image.naturalWidth, 160 / image.naturalHeight);
+  const width = Math.max(1, Math.round(image.naturalWidth * scale)), height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height; const x = canvas.getContext('2d', { willReadFrequently: true });
+  x.imageSmoothingQuality = 'high'; x.drawImage(image, 0, 0, width, height);
+  return { width, height, rgba: Array.from(x.getImageData(0, 0, width, height).data) };
 })`;
 
 const RENDER = `(async (items, paperDots) => {
@@ -107,7 +118,17 @@ const RENDER = `(async (items, paperDots) => {
     const footerImage = message ? await evaluate(`${DRAW_CAPTION}(${dots}, ${paper === 58 ? 26 : 30}, null, ${JSON.stringify(message)})`) : null;
     const footerRaster = footerImage ? rasterFromRgba(Uint8Array.from(footerImage.rgba), footerImage.width, footerImage.height) : null;
     const raster = rasterFromRgba(Uint8Array.from(caption.rgba), caption.width, caption.height);
-    const bytes = buildReceipt({ shareUrl, shortCode: 'ABCD2345', eventUrl: 'https://kokomemory.com/e/3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), paper, captionRaster: raster, footerRaster });
+    let logoRaster = null;
+    if (logoFile) {
+      const mime = /\.jpe?g$/i.test(logoFile) ? 'image/jpeg' : 'image/png';
+      const logo = await evaluate(`${DRAW_LOGO}(${JSON.stringify(`data:${mime};base64,${fs.readFileSync(logoFile).toString('base64')}`)})`);
+      const pixels = Uint8Array.from(logo.rgba);
+      const { darkRatio, LOGO_INVERT_ABOVE } = require('../src/shared/receipt-raster.ts');
+      const flip = darkRatio(pixels, 160) > LOGO_INVERT_ABOVE;
+      if (flip) console.log('Logo is mostly dark: flipped to dark marks on white, like the app does.');
+      logoRaster = rasterFromRgba(pixels, logo.width, logo.height, 160, flip);
+    }
+    const bytes = buildReceipt({ shareUrl, shortCode: 'ABCD2345', eventUrl: 'https://kokomemory.com/e/3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), paper, captionRaster: raster, footerRaster, logoRaster });
     const result = emulate(bytes, { paperDots: dots });
     const items = result.items.filter(item => item.type !== 'reset').map(item => item.type === 'raster' ? { ...item, data: undefined, dataBase64: item.data.toString('base64') } : item);
     const rendered = await evaluate(`${RENDER}(${JSON.stringify(items)}, ${dots})`);

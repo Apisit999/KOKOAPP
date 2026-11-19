@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PrinterStatus, ReceiptCaptionImage, ReceiptPrinterConfig, ReceiptSettings } from '../shared/contract';
 import { rasterFromRgba } from '../shared/receipt-raster';
 import { MAX_RECEIPT_COPIES, SERIAL_BAUD_RATES } from '../shared/receipt-settings';
@@ -97,6 +97,26 @@ export function describePrinterStatus(status: PrinterStatus, th: boolean): { ok:
   }
 }
 
+/** Shows a black-and-white receipt picture exactly as the printer will put it on paper. */
+function RasterPreview({ image, label }: { image: ReceiptCaptionImage; label: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    canvas.width = image.width; canvas.height = image.height;
+    const picture = context.createImageData(image.width, image.height);
+    const rowBytes = image.width / 8;
+    for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+      const black = (image.data[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1;
+      const at = (y * image.width + x) * 4;
+      picture.data[at] = picture.data[at + 1] = picture.data[at + 2] = black ? 0 : 255; picture.data[at + 3] = 255;
+    }
+    context.putImageData(picture, 0, 0);
+  }, [image]);
+  return <canvas ref={canvasRef} role="img" aria-label={label} style={{ background: '#fff', maxWidth: '100%', height: 'auto', border: '1px solid #666' }} />;
+}
+
 type Kind = 'none' | ReceiptPrinterConfig['kind'];
 
 export function ReceiptSettingsBlock({ th, event }: { th: boolean; event: ReceiptEventInfo | null }) {
@@ -105,6 +125,26 @@ export function ReceiptSettingsBlock({ th, event }: { th: boolean; event: Receip
   const [host, setHost] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [logo, setLogo] = useState<ReceiptCaptionImage | null>(null);
+  useEffect(() => { void window.koko.getReceiptLogo().then(setLogo).catch(() => undefined); }, []);
+  async function chooseLogo() {
+    setBusy(true); setMessage('');
+    try {
+      const next = await window.koko.importReceiptLogo();
+      if (next) {
+        setLogo(next.image);
+        setMessage(next.inverted
+          ? (th ? 'ตั้งโลโก้แล้ว ภาพนี้พื้นมืด ระบบสลับเป็นตัวดำบนพื้นขาวให้เพื่อไม่ให้พิมพ์เป็นก้อนดำ ลองพิมพ์ใบทดสอบเพื่อดูผลจริง' : 'Logo saved. The image is mostly dark, so it was flipped to dark marks on white to avoid a black block. Print a test receipt to check.')
+          : (th ? 'ตั้งโลโก้ใบเสร็จแล้ว ลองพิมพ์ใบทดสอบเพื่อดูผลจริง' : 'Receipt logo saved. Print a test receipt to see it on paper.'));
+      }
+    }
+    catch (error) { setMessage(error instanceof Error ? error.message : (th ? 'ตั้งโลโก้ไม่สำเร็จ' : 'Could not set the logo.')); }
+    finally { setBusy(false); }
+  }
+  async function removeLogo() {
+    try { await window.koko.clearReceiptLogo(); setLogo(null); setMessage(th ? 'ลบโลโก้แล้ว ใบเสร็จจะใช้ข้อความ KOKO MEMORY' : 'Logo removed. The receipt shows the KOKO MEMORY heading again.'); }
+    catch (error) { setMessage(error instanceof Error ? error.message : (th ? 'ลบโลโก้ไม่สำเร็จ' : 'Could not remove the logo.')); }
+  }
   useEffect(() => {
     void window.koko.getReceiptSettings().then(value => { setSettings(value); if (value.printer?.kind === 'network') setHost(value.printer.host); }).catch(() => setMessage(th ? 'อ่านการตั้งค่าเครื่องพิมพ์ใบเสร็จไม่ได้' : 'Could not read the receipt printer settings.'));
     void window.koko.listReceiptPrinters().then(setLists).catch(() => undefined);
@@ -145,6 +185,10 @@ export function ReceiptSettingsBlock({ th, event }: { th: boolean; event: Receip
         {([['none', th ? 'ไม่ใช้' : 'Off'], ['windows', th ? 'USB / บลูทูธ (ใน Windows)' : 'USB / Bluetooth (Windows)'], ['network', th ? 'LAN / Wi-Fi' : 'LAN / Wi-Fi'], ['serial', th ? 'พอร์ต COM' : 'COM port']] as Array<[Kind, string]>).map(([value, label]) => <button key={value} type="button" className={kind === value ? 'active' : ''} aria-pressed={kind === value} onClick={() => choose(value)}>{label}</button>)}
       </div>
     </div>
+    <div className="setting-row"><span>{th ? 'โลโก้บนใบเสร็จ' : 'Receipt logo'}</span>
+      {logo ? <RasterPreview image={logo} label={th ? 'ตัวอย่างโลโก้ขาวดำบนใบเสร็จ' : 'Black-and-white preview of the receipt logo'} /> : <small>{th ? 'ยังไม่ได้ตั้ง ใบเสร็จจะพิมพ์ข้อความ KOKO MEMORY' : 'Not set. The receipt prints the KOKO MEMORY heading.'}</small>}
+      <div><button type="button" onClick={() => void chooseLogo()} disabled={busy}>{logo ? (th ? 'เปลี่ยนโลโก้' : 'Change logo') : (th ? 'เลือกโลโก้' : 'Choose a logo')}</button>{logo && <>{' '}<button type="button" onClick={() => void removeLogo()}>{th ? 'ลบโลโก้' : 'Remove logo'}</button></>}</div>
+      <small>{th ? 'ใช้ภาพโลโก้พื้นขาวหรือโปร่งใส ตัวอักษรเข้ม ระบบจะย่อและแปลงเป็นขาวดำให้ (กว้างสุด 48 มม.)' : 'Use a logo with dark marks on a white or transparent background. It is shrunk and turned black and white (up to 48 mm wide).'}</small></div>
     {printer?.kind === 'windows' && <div className="setting-row"><span>{th ? 'เครื่องพิมพ์ที่ลงไว้ใน Windows' : 'Printer installed in Windows'}</span>
       <select value={printer.name} onChange={event => void save({ ...settings, printer: { kind: 'windows', name: event.target.value } })}>{!lists.windows.includes(printer.name) && <option value={printer.name}>{printer.name || (th ? 'เลือกเครื่องพิมพ์' : 'Choose a printer')}</option>}{lists.windows.map(name => <option key={name} value={name}>{name}</option>)}</select>
       <small>{th ? 'เสียบสาย USB หรือจับคู่บลูทูธใน Windows ก่อน แล้วเลือกชื่อเครื่องที่นี่' : 'Plug in the USB cable or pair Bluetooth in Windows first, then pick it here.'}</small></div>}
