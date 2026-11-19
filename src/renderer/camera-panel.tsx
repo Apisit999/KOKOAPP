@@ -14,6 +14,20 @@ import { drawImageLayers, drawTextLayers, loadImageLayers } from './template-lay
 import { ensureFonts, fontStack } from './fonts';
 import { cameraManager, hasLowPhotoStorage, formatStorageSpace, PhotoThumb } from './ui-common';
 
+/**
+ * The built-in sample photos are SVG. createImageBitmap cannot decode SVG in Electron's Chromium ("The source image could not be
+ * decoded"), but an image element can, so the sample mode decodes through one.
+ */
+async function decodeSampleImage(blob: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: 'image/svg+xml' }));
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return image;
+  } finally { URL.revokeObjectURL(url); }
+}
+
 export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageReady = false, storageAvailableBytes = null, photos = [], onOpenPhoto, onDeletePhoto, onExportPhoto, onOpenStorage, onOpenGallery, onOpenSettings, onOpenPrint, onOpenGuestDisplay, guestDisplayActive = false, availableGuestDisplays = [], selectedGuestDisplayId = null, onSelectGuestDisplay, storageName = null, activeEventName = null, activeReceiptMessage = null, guestMode = false, guestTemplate = null }: {
   th: boolean; onStatus?: (status: CameraStatus) => void; onCapture?: (photo: SavedPhoto) => void | Promise<void>; onVideoCapture?: (video: SavedVideo) => void | Promise<void>; storageReady?: boolean;
   storageAvailableBytes?: number | null;
@@ -532,13 +546,13 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         setCaptureProgress(index + 1);
         const response = await fetch(new URL(`./demo/portrait-${['one', 'two', 'three', 'four'][index]}.svg`, window.location.href));
         if (!response.ok) throw new Error('A built-in sample photo could not be loaded.');
-        const bitmap = await createImageBitmap(await response.blob());
-        const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+        const bitmap = await decodeSampleImage(await response.blob());
+        const scale = Math.min(1, 2400 / Math.max(bitmap.naturalWidth, bitmap.naturalHeight));
         const canvas = document.createElement('canvas');
-        canvas.width = Math.max(2, Math.round(bitmap.width * scale)); canvas.height = Math.max(2, Math.round(bitmap.height * scale));
+        canvas.width = Math.max(2, Math.round(bitmap.naturalWidth * scale)); canvas.height = Math.max(2, Math.round(bitmap.naturalHeight * scale));
         const context = canvas.getContext('2d');
-        if (!context) { bitmap.close(); throw new Error('Sample photo canvas is unavailable.'); }
-        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
+        if (!context) throw new Error('Sample photo canvas is unavailable.');
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
         const jpeg = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not encode the sample photo.')), 'image/jpeg', .94));
         const saved = await window.koko.savePhoto(new Uint8Array(await jpeg.arrayBuffer()), authorizationId);
         savedIds.push(saved.id); setRoundPhotoIds(current => [...current, saved.id]);
