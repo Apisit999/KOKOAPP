@@ -117,6 +117,33 @@ export class VideoStore {
     }
   }
 
+  /** Takes a video out of the library and hands its file to the system Trash. Returns false when it is already gone. */
+  moveVideoToTrash(id: string, moveToSystemTrash: (videoPath: string) => Promise<void>): Promise<boolean> {
+    const task = this.writeQueue.then(() => this.moveToTrashSerial(id, moveToSystemTrash));
+    this.writeQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  private async moveToTrashSerial(id: string, moveToSystemTrash: (videoPath: string) => Promise<void>): Promise<boolean> {
+    if (typeof id !== 'string' || !UUID.test(id)) throw new Error('Invalid video ID');
+    this.configure();
+    const index = this.readIndex();
+    const video = index.videos.find(item => item.id === id);
+    if (!video) return false;
+    const videoPath = path.join(this.directory, video.fileName);
+    // The record goes first; if the system cannot move the file, the record is put back so nothing is orphaned.
+    this.writeIndex({ schemaVersion: 1, videos: index.videos.filter(item => item.id !== id) });
+    try {
+      await moveToSystemTrash(videoPath);
+      if (existsSync(videoPath)) throw new Error('The operating system did not move the video to Trash');
+    } catch (error) {
+      if (!existsSync(videoPath)) return true;
+      this.writeIndex(index);
+      throw error;
+    }
+    return true;
+  }
+
   private readIndex(): VideoIndex {
     const value: unknown = JSON.parse(readFileSync(this.indexPath, 'utf8'));
     if (!value || typeof value !== 'object') throw new Error('Video index is invalid');

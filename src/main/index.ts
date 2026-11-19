@@ -24,6 +24,7 @@ import { PhotoCloudClient } from './services/photo-cloud-client';
 import { StudioCloudClient, StudioCloudError } from './services/studio-cloud-client';
 import { retryPendingPhotoCloudUploads, shouldAutomaticallyUploadSession } from './services/photo-cloud-recovery';
 import { RetryBackoff } from './services/retry-backoff';
+import { deleteCaptureRound } from './services/capture-round-delete';
 import { recoverStudioCloudSessions } from './services/studio-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
@@ -1119,6 +1120,45 @@ app.on('ready', () => {
     trusted(event);
     if (typeof sessionId !== 'string' || !['review', 'confirmed', 'cancelled', 'retaken'].includes(nextStatus as string)) throw new Error('Invalid capture session update');
     return captureSessions().finish(sessionId, nextStatus as 'review' | 'confirmed' | 'cancelled' | 'retaken');
+  });
+  ipcMain.handle('koko:capture-round-delete', async (event, sessionId: unknown) => {
+    trusted(event);
+    if (typeof sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId) || !mainWindow) throw new Error('Invalid capture session ID');
+    const session = captureSessions().get(sessionId);
+    if (!session) throw new Error('Capture session not found');
+    const root = configuredPhotoRoot();
+    if (!root) throw new Error('Photo storage is not configured');
+    const mediaCount = new Set([...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])]).size;
+    const videoCount = new Set(session.videoIds ?? []).size;
+    const thai = readSettings().language === 'th';
+    // The question is asked by the main process, not the page, so a script in the window cannot delete without a person clicking.
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: thai ? 'ลบรอบถ่ายนี้?' : 'Delete this round?',
+      message: thai ? 'ลบรอบถ่ายนี้และปิดลิงก์ของแขก' : 'Delete this round and cancel its guest link?',
+      detail: thai
+        ? `รูป ${mediaCount} รูป และวิดีโอ ${videoCount} ไฟล์ จะถูกย้ายไปถังขยะของ Windows (กู้คืนจากถังขยะได้) ลิงก์และ QR ที่แขกถืออยู่จะใช้ไม่ได้อีก\n\nสำเนาที่อัปโหลดไว้ในบัญชีคลาวด์ของคุณจะไม่ถูกลบจากที่นี่ แต่จะเปิดดูผ่านลิงก์ไม่ได้ ลบสำเนานั้นได้ที่หน้าเว็บบัญชีของคุณ`
+        : `${mediaCount} photo(s) and ${videoCount} video(s) will be moved to the Windows Recycle Bin (recoverable from there). The link and QR the guest holds will stop working.\n\nCopies already uploaded to your cloud account are not deleted from here, but can no longer be opened through the link. Delete them from your account on the website.`,
+      buttons: thai ? ['ยกเลิก', 'ลบรอบนี้'] : ['Cancel', 'Delete round'],
+      defaultId: 0, cancelId: 0, noLink: true
+    });
+    if (confirmation.response !== 1) return { cancelled: true, photos: 0, videos: 0, failed: 0, done: false };
+    // Look again after the window closes: the round may have changed while the question was open.
+    const current = captureSessions().get(sessionId);
+    if (!current) throw new Error('Capture session not found');
+    const result = await deleteCaptureRound({
+      session: current,
+      revokeLinks: async () => {
+        // Both link systems: the account cloud and the older folder-based album. A round without a link simply has nothing to cancel.
+        if (studioCloud().getShare(sessionId)) await studioCloud().revokeShare(sessionId);
+        if (photoCloud().getShareUrl(sessionId)) await photoCloud().revokeShareForSession(sessionId);
+      },
+      trashPhoto: id => getPhotoStore(root).movePhotoToTrash(id, photoPath => shell.trashItem(photoPath)),
+      trashVideo: id => getVideoStore(root).moveVideoToTrash(id, videoPath => shell.trashItem(videoPath)),
+      markDeleted: () => { captureSessions().markMediaDeleted(sessionId); }
+    });
+    log('capture-round-deleted', undefined, { sessionId, photos: result.photos, videos: result.videos, failed: result.failed.length });
+    return { cancelled: false, photos: result.photos, videos: result.videos, failed: result.failed.length, done: result.done };
   });
   ipcMain.handle('koko:memory-status', event => { trusted(event); return memoryConnections().getStatus(); });
   ipcMain.handle('koko:memory-import-config', async event => {

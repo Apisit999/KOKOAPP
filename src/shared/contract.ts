@@ -113,6 +113,11 @@ export type Bridge = {
   updateEvent(id: string, value: { name: string; date: string | null; notes: string; receiptMessage?: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
+  /**
+   * Deletes a whole capture round after a confirmation window: cancels its guest link, moves its photos and videos to the system
+   * Trash and keeps only a cancelled record. Resolves { cancelled: true } when the owner says no.
+   */
+  deleteCaptureRound(sessionId: string): Promise<{ cancelled: boolean; photos: number; videos: number; failed: number; done: boolean }>;
   getBoothStatus(): Promise<BoothStatus>;
   /** The black-and-white logo printed at the top of the guest receipt, or null for the plain text heading. */
   getReceiptLogo(): Promise<ReceiptCaptionImage | null>;

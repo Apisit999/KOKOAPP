@@ -92,6 +92,7 @@ const bridge: Bridge = {
   getReceiptLogo: () => ipcRenderer.invoke('koko:receipt-logo-get'),
   importReceiptLogo: () => ipcRenderer.invoke('koko:receipt-logo-import'),
   clearReceiptLogo: () => ipcRenderer.invoke('koko:receipt-logo-clear'),
+  deleteCaptureRound: sessionId => ipcRenderer.invoke('koko:capture-round-delete', sessionId),
   getBoothStatus: () => ipcRenderer.invoke('koko:booth-status'),
   getReceiptSettings: () => ipcRenderer.invoke('koko:receipt-settings-get'),
   saveReceiptSettings: value => ipcRenderer.invoke('koko:receipt-settings-save', value),

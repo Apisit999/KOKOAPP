@@ -170,6 +170,24 @@ export class CaptureSessionStore {
     return item;
   }
 
+  /**
+   * The owner deleted this round: its photos and videos are gone, so the record keeps only the fact that it existed (as cancelled).
+   * It no longer counts as a confirmed round in event statistics and is never uploaded again.
+   */
+  markMediaDeleted(sessionId: string) {
+    if (!UUID.test(sessionId)) throw new Error('Invalid capture session');
+    const index = this.read();
+    const item = index.sessions.find(session => session.id === sessionId);
+    if (!item) return null;
+    item.status = 'cancelled';
+    item.photoIds = [];
+    delete item.compositionPhotoId;
+    item.videoIds = [];
+    item.updatedAt = new Date().toISOString();
+    this.write(index);
+    return item;
+  }
+
   list(limit = 100, offset = 0): CaptureSessionRecord[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200
       || !Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000) throw new Error('Invalid capture session page');
