@@ -49,6 +49,7 @@
     "test:printer-readiness": "node --test tests/printer-readiness.test.cjs",
     "test:studio-cloud": "node --test tests/studio-cloud-client.test.cjs",
     "receipt:preview": "node scripts/receipt-preview.cjs",
+    "test:m3": "node --test tests/m3-offline-scenario.test.cjs tests/retry-backoff.test.cjs tests/studio-cloud-client.test.cjs tests/photo-folder-watcher.test.cjs",
     "test:receipt": "node --test tests/escpos-receipt.test.cjs tests/receipt-printers.test.cjs tests/receipt-settings.test.cjs tests/receipt-simulation.test.cjs"
   },
   "dependencies": {

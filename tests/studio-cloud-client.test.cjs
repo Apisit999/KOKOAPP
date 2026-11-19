@@ -202,3 +202,38 @@ test('an account without cloud drops a link that was never registered', async ()
   assert.equal(f.client.getShare(S2), null);
   assert.equal((await f.client.ensureShare(S2)).token, undefined, 'falls back to asking the server');
 });
+
+test('pendingSessionIds: lists only sessions with unconfirmed photos or an unregistered local link', async () => {
+  const f = make();
+  const DONE = '44444444-4444-4444-8444-444444444444';
+  const sessions = [{ id: SESSION, photoIds: [P1, P2] }, { id: 'no-media', photoIds: [] }];
+  assert.deepEqual(f.client.pendingSessionIds(sessions), [SESSION], 'nothing uploaded yet');
+  await f.client.uploadSession(session([{ id: P1, bytes: bytes('one') }, { id: P2, bytes: bytes('two') }]));
+  assert.deepEqual(f.client.pendingSessionIds(sessions), [], 'all photos confirmed, no local link waiting');
+  assert.deepEqual(f.client.pendingSessionIds([{ id: SESSION, photoIds: [P1, DONE] }]), [SESSION], 'one more photo that was never uploaded');
+  assert.deepEqual(f.client.pendingSessionIds([{ id: SESSION, photoIds: [P1], compositionPhotoId: DONE }]), [SESSION], 'the composed picture counts too');
+});
+
+test('pendingSessionIds: a link made on this PC while offline keeps its session pending until the server knows it', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'koko-cloud-'));
+  writeFileSync(path.join(dir, 'studio-cloud-index.json'), JSON.stringify({ schemaVersion: 1, events: { ['session-' + SESSION]: EVENT }, uploaded: [P1.replace(/-/g, '')], shares: {}, cloudReady: true }));
+  const calls = [];
+  const client = new StudioCloudClient(dir, { call: async (route, payload) => { calls.push(route); if (route.endsWith('/events')) return { eventId: EVENT }; if (route.endsWith('/sessions')) return { shortCode: 'ABCD2345', expiresAt: '2030-01-01T00:00:00Z', eventUrl: `https://kokomemory.com/e/${EVENT}` }; return {}; } }, async () => undefined, Date.now, 'https://kokomemory.com');
+  const share = await client.ensureShare(SESSION);
+  assert.equal(share.registered, false, 'made offline, no server call');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(client.pendingSessionIds([{ id: SESSION, photoIds: [P1] }]), [SESSION]);
+  await client.uploadSession({ sessionId: SESSION, eventId: null, eventName: 'Wedding A', photos: [{ id: P1, bytes: bytes('one') }] });
+  assert.equal(client.getShare(SESSION).registered, true);
+  assert.equal(client.getShare(SESSION).shortCode, 'ABCD2345');
+  assert.deepEqual(client.pendingSessionIds([{ id: SESSION, photoIds: [P1] }]), []);
+});
+
+test('pendingSummary: counts waiting rounds, photos and unregistered links, and says whether the booth ever used the cloud', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'koko-cloud-'));
+  const client = new StudioCloudClient(dir, { call: async () => ({}) }, async () => undefined);
+  const sessions = [{ id: SESSION, photoIds: [P1, P2] }, { id: 'other', photoIds: [], compositionPhotoId: P1 }];
+  assert.deepEqual(client.pendingSummary(sessions), { cloudUsed: false, sessions: 2, photos: 3, unregisteredLinks: 0 });
+  writeFileSync(path.join(dir, 'studio-cloud-index.json'), JSON.stringify({ schemaVersion: 1, events: {}, uploaded: [P1.replace(/-/g, '')], shares: {}, cloudReady: true }));
+  assert.deepEqual(client.pendingSummary(sessions), { cloudUsed: true, sessions: 1, photos: 1, unregisteredLinks: 0 });
+});

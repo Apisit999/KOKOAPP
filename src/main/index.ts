@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen, session, shell, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, screen, session, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, renameSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +22,8 @@ import { LICENSE_API_BASE_URL, LICENSE_PRODUCT_ID, LICENSE_TRUSTED_KEYS, PHOTO_C
 import { PhotoCloudClient } from './services/photo-cloud-client';
 import { StudioCloudClient, StudioCloudError } from './services/studio-cloud-client';
 import { retryPendingPhotoCloudUploads, shouldAutomaticallyUploadSession } from './services/photo-cloud-recovery';
+import { RetryBackoff } from './services/retry-backoff';
+import { recoverStudioCloudSessions } from './services/studio-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
 import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
@@ -236,7 +238,7 @@ async function uploadCaptureSessionToStudioCloud(sessionId: string, manual = fal
   const photos = photoIds.filter(id => !studioCloud().isUploaded(id)).map(id => ({ id, bytes: getPhotoStore(root).readPhoto(id).bytes }));
   if (!photos.length) { await studioCloud().ensureShare(session.id).catch(error => log('studio-cloud-share-failed', error, { sessionId })); return; }
   const result = await studioCloud().uploadSession({ sessionId: session.id, eventId: session.eventId, eventName: event?.name || `Photo session ${new Date(session.createdAt).toLocaleString('en-GB')}`, date: event?.date ?? null, photos });
-  if (result.uploaded) log('studio-cloud-uploaded', undefined, { sessionId, uploaded: result.uploaded });
+  if (result.uploaded) { lastCloudUploadAt = new Date().toISOString(); lastCloudError = null; log('studio-cloud-uploaded', undefined, { sessionId, uploaded: result.uploaded }); }
   // The guest QR link is created right after the photos are safe in the account; a failure here never undoes the upload.
   await studioCloud().ensureShare(session.id).catch(error => log('studio-cloud-share-failed', error, { sessionId }));
 }
@@ -303,6 +305,35 @@ function configuredPhotoRoot(): string | null {
     if (config.version !== 1 || typeof config.root !== 'string' || !path.isAbsolute(config.root)) return null;
     return path.resolve(config.root);
   } catch { return null; }
+}
+/**
+ * Offline-first: photos and guest links stay on this PC while the internet is down. When it comes back in the middle of an event,
+ * finish the waiting sessions without anyone restarting the app. One pass at a time; sessions that keep failing are retried less often.
+ */
+const studioRecoveryBackoff = new RetryBackoff();
+/** For the status card only; kept in memory because it describes this run of the app. */
+let lastCloudUploadAt: string | null = null;
+let lastCloudError: string | null = null;
+let studioRecoveryRunning = false;
+async function recoverStudioCloudPending() {
+  if (studioRecoveryRunning || !net.isOnline() || !configuredPhotoRoot()) return;
+  studioRecoveryRunning = true;
+  try {
+    await recoverStudioCloudSessions({
+      sessions: captureSessions().listForCloudRecovery(),
+      pendingIds: sessions => studioCloud().pendingSessionIds(sessions),
+      upload: id => uploadCaptureSessionToStudioCloud(id),
+      backoff: studioRecoveryBackoff,
+      now: Date.now,
+      isPermanent: error => error instanceof StudioCloudError && error.permanent,
+      isNoCloud: error => error instanceof StudioCloudError && NO_ACCOUNT_CLOUD.includes(error.code),
+      onResult: (sessionId, error) => {
+        if (error) { lastCloudError = error instanceof StudioCloudError ? error.code : 'upload_failed'; log('studio-cloud-recovery-failed', error, { sessionId }); }
+        else { lastCloudUploadAt = new Date().toISOString(); lastCloudError = null; log('studio-cloud-recovered', undefined, { sessionId }); }
+      }
+    });
+  } catch (error) { log('studio-cloud-recovery-failed', error); }
+  finally { studioRecoveryRunning = false; }
 }
 function recoverPendingPhotoCloudUploads() {
   const root = configuredPhotoRoot();
@@ -711,6 +742,21 @@ app.on('ready', () => {
     if (item.width > RASTER_MAX_WIDTH || item.height > RASTER_MAX_HEIGHT) throw new Error('Invalid receipt image');
     return { width: item.width, height: item.height, data: item.data };
   };
+  ipcMain.handle('koko:booth-status', event => {
+    trusted(event);
+    let cloud = { used: false, waitingSessions: 0, waitingPhotos: 0, unregisteredLinks: 0 };
+    try {
+      const summary = studioCloud().pendingSummary(captureSessions().listForCloudRecovery());
+      cloud = { used: summary.cloudUsed, waitingSessions: summary.sessions, waitingPhotos: summary.photos, unregisteredLinks: summary.unregisteredLinks };
+    } catch (error) { log('booth-status-cloud-failed', error); }
+    const folder = cameraFolderWatcher?.status();
+    return {
+      online: net.isOnline(),
+      cloud: { ...cloud, lastUploadAt: lastCloudUploadAt, lastError: lastCloudError },
+      cameraFolder: { enabled: folder?.enabled ?? false, importedCount: folder?.importedCount ?? 0, lastError: folder?.lastError ?? null },
+      receiptPrinter: { configured: receiptSettings().printer !== null }
+    };
+  });
   ipcMain.handle('koko:receipt-settings-get', event => { trusted(event); return receiptSettings(); });
   ipcMain.handle('koko:receipt-settings-save', (event, value: unknown) => {
     trusted(event);
@@ -1358,6 +1404,7 @@ app.on('ready', () => {
   }
   setTimeout(recoverPendingPhotoCloudUploads, 2000);
   setTimeout(() => { try { memoryQueue(); void drainKokoMemoryQueue(); } catch (error) { log('kokomemory-queue-restore-failed', error); } }, 2500);
+  setInterval(() => { void recoverStudioCloudPending(); }, 60_000);
   setInterval(() => { void drainKokoMemoryQueue().catch(error => log('kokomemory-queue-drain-failed', error)); }, 15_000);
 });
 app.on('before-quit', () => { cameraFolderWatcher?.stop(); });

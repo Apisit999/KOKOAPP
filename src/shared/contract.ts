@@ -34,6 +34,13 @@ export type CaptureTextLayer = { id: string; text: string; x: number; y: number;
 export type CaptureImageLayer = { id: string; src: string; x: number; y: number; width: number; height: number };
 export type CaptureTemplateSnapshot = { id: string; name: string; fontId?: string; size?: TemplateSizeId; count: TemplateCount; title: string; footer: string; background: string; frame: string; showDate: boolean; overlay?: string; slots?: Array<{ x: number; y: number; width: number; height: number }>; textLayers?: CaptureTextLayer[]; videoFrame?: { x: number; y: number; width: number; height: number }; videoTextLayers?: CaptureTextLayer[]; imageLayers?: CaptureImageLayer[]; videoImageLayers?: CaptureImageLayer[] };
 export type CaptureSessionRecord = { id: string; eventId: string | null; template: CaptureTemplateSnapshot | null; photoIds: string[]; compositionPhotoId?: string; videoIds?: string[]; status: 'capturing' | 'review' | 'confirmed' | 'interrupted' | 'cancelled' | 'retaken'; createdAt: string; updatedAt: string };
+/** What staff need to see during an event: internet, photos waiting for the cloud, camera folder and receipt printer setup. */
+export type BoothStatus = {
+  online: boolean;
+  cloud: { used: boolean; waitingSessions: number; waitingPhotos: number; unregisteredLinks: number; lastUploadAt: string | null; lastError: string | null };
+  cameraFolder: { enabled: boolean; importedCount: number; lastError: string | null };
+  receiptPrinter: { configured: boolean };
+};
 export type Bridge = {
   isMacOS: boolean;
   getStatus(): Promise<AppStatus>;
@@ -106,6 +113,7 @@ export type Bridge = {
   updateEvent(id: string, value: { name: string; date: string | null; notes: string }): Promise<PhotoboothEvent>;
   deleteEvent(id: string): Promise<boolean>;
   setActiveEvent(id: string | null): Promise<PhotoboothEvent | null>;
+  getBoothStatus(): Promise<BoothStatus>;
   getReceiptSettings(): Promise<ReceiptSettings>;
   saveReceiptSettings(value: ReceiptSettings): Promise<ReceiptSettings>;
   listReceiptPrinters(): Promise<{ windows: string[]; serial: string[] }>;

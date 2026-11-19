@@ -89,6 +89,7 @@ const bridge: Bridge = {
   updateEvent: (id, value) => ipcRenderer.invoke('koko:events-update', id, value),
   deleteEvent: id => ipcRenderer.invoke('koko:events-delete', id),
   setActiveEvent: id => ipcRenderer.invoke('koko:events-set-active', id),
+  getBoothStatus: () => ipcRenderer.invoke('koko:booth-status'),
   getReceiptSettings: () => ipcRenderer.invoke('koko:receipt-settings-get'),
   saveReceiptSettings: value => ipcRenderer.invoke('koko:receipt-settings-save', value),
   listReceiptPrinters: () => ipcRenderer.invoke('koko:receipt-printers'),

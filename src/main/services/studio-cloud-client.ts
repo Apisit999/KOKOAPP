@@ -59,6 +59,37 @@ export class StudioCloudClient {
 
   isUploaded(photoId: string) { return this.read().uploaded.includes(photoId.replace(/-/g, '')); }
 
+  /**
+   * Sessions that still have work for the cloud: a photo that was never confirmed, or a link made on this PC that the server
+   * has not been told about yet. Reads the index once, so it is cheap to ask every minute even with hundreds of sessions.
+   */
+  pendingSessionIds(sessions: Array<{ id: string; photoIds: string[]; compositionPhotoId?: string }>): string[] {
+    const index = this.read();
+    const uploaded = new Set(index.uploaded);
+    return sessions.filter(session => {
+      const photoIds = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])];
+      if (photoIds.some(id => !uploaded.has(id.replace(/-/g, '')))) return true;
+      const share = index.shares[session.id];
+      return Boolean(share?.token && !share.registered && !share.revoked);
+    }).map(session => session.id);
+  }
+
+  /** For the status card: how much is still waiting for the cloud. cloudUsed is false for booths that never reached it, so the card stays quiet for them. */
+  pendingSummary(sessions: Array<{ id: string; photoIds: string[]; compositionPhotoId?: string }>): { cloudUsed: boolean; sessions: number; photos: number; unregisteredLinks: number } {
+    const index = this.read();
+    const uploaded = new Set(index.uploaded);
+    let waitingSessions = 0, photos = 0, unregisteredLinks = 0;
+    for (const session of sessions) {
+      const missing = [...session.photoIds, ...(session.compositionPhotoId ? [session.compositionPhotoId] : [])].filter(id => !uploaded.has(id.replace(/-/g, ''))).length;
+      const share = index.shares[session.id];
+      const link = Boolean(share?.token && !share.registered && !share.revoked);
+      if (missing || link) waitingSessions++;
+      photos += missing;
+      if (link) unregisteredLinks++;
+    }
+    return { cloudUsed: index.cloudReady === true, sessions: waitingSessions, photos, unregisteredLinks };
+  }
+
   /** The saved guest link of a session, or null. A cancelled link is returned with revoked=true so it is never re-issued silently. */
   getShare(sessionId: string): StudioShare | null { return this.read().shares[sessionId] ?? null; }
 
