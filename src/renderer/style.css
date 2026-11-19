@@ -813,3 +813,10 @@ button { -webkit-tap-highlight-color: transparent }
 
 .photo-cloud-share button.danger-action { border-color: rgba(231,111,111,.55); color: #ffb4b4 }
 .photo-cloud-share button.danger-action:hover:not(:disabled) { border-color: #e76f6f; color: #ffd8d8 }
+
+/* Receipt printer block: one column, and segmented controls that fit four options */
+.receipt-settings { grid-template-columns: 1fr; align-items: start }
+.receipt-settings .segmented-control { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) }
+.receipt-settings .setting-row select, .receipt-settings .setting-row input:not([type=checkbox]) { max-width: 420px }
+.receipt-settings .setting-row > div:not(.segmented-control) { display: flex; flex-wrap: wrap; gap: 8px }
+.receipt-settings .setting-row input:not([type=checkbox]), .receipt-settings .setting-row select, .session-search input[type=search], .session-search select { min-height: 36px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; background: var(--raised); color: var(--text); font: inherit }
