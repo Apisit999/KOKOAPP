@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { MIN_FREE_PHOTO_STORAGE_BYTES } from '../shared/contract';
 import type { PhotoRecord, SavedPhoto, SavedVideo, Settings, GuestDisplayPayload } from '../shared/contract';
 import { CameraError, type CameraDevice, type CameraStatus } from './camera/camera-adapter';
+import { videoLooksLikeNoSignal } from './camera/no-signal-check';
 import { waitForCaptureDelay } from './camera/capture-delay';
 import { Icon } from './icons';
 import { drawComposition } from './templates';
@@ -246,6 +247,12 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         : (th ? 'เลือกโฟลเดอร์เก็บภาพก่อนเริ่มถ่าย' : 'Choose a photo storage folder before capturing.'));
       return;
     }
+    const label = stream.getVideoTracks()[0]?.label ?? '';
+    if (/EOS Webcam/i.test(label) && await videoLooksLikeNoSignal(video)) {
+      setCaptureError(th ? 'ไม่ได้รับภาพจากกล้อง Canon ตรวจสาย USB เปิดกล้อง และปิดโปรแกรมอื่นที่ใช้กล้องอยู่ (เช่น digiCamControl, EOS Utility)' : 'No picture from the Canon camera. Check the USB cable, turn the camera on, and close other apps using it (e.g. digiCamControl, EOS Utility).');
+      return;
+    }
+    if (capturingRef.current) return;
     capturingRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
