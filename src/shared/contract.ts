@@ -75,6 +75,9 @@ export type Bridge = {
   completeCaptureSession(sessionId: string, status: 'review' | 'confirmed' | 'cancelled' | 'retaken'): Promise<CaptureSessionRecord | null>;
   syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number; cloudAvailable?: boolean }>;
   onPhotoCloudProgress(listener: (progress: PhotoCloudProgress) => void): () => void;
+  externalRoundStart(captureAuthorization: string): Promise<boolean>;
+  externalRoundStop(): Promise<boolean>;
+  onExternalRoundPhoto(listener: (photo: SavedPhoto) => void): () => void;
   getCameraUsbStatus(): Promise<CameraUsbStatus>;
   startCameraUsb(): Promise<CameraUsbStatus>;
   stopCameraUsb(): Promise<CameraUsbStatus>;

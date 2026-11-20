@@ -19,6 +19,9 @@ import { cameraManager, hasLowPhotoStorage, formatStorageSpace, PhotoThumb } fro
  * The built-in sample photos are SVG. createImageBitmap cannot decode SVG in Electron's Chromium ("The source image could not be
  * decoded"), but an image element can, so the sample mode decodes through one.
  */
+const EXTERNAL_CAMERA_ID = '__external__';
+const EXTERNAL_PHOTO_WAIT_MS = 4 * 60_000;
+
 async function decodeSampleImage(blob: Blob): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: 'image/svg+xml' }));
   try {
@@ -47,6 +50,11 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   const [cameraAspect, setCameraAspect] = useState<number | null>(null);
   const [cameraState, setCameraState] = useState<CameraStatus>('searching');
   const [noSignal, setNoSignal] = useState(false);
+  // "Shoot on the camera" source: the photographer or a remote presses the shutter and photos arrive by USB or folder.
+  const [externalMode, setExternalMode] = useState(false);
+  const [externalSources, setExternalSources] = useState<{ usbReady: boolean; usbBusy: boolean; folder: boolean }>({ usbReady: false, usbBusy: false, folder: false });
+  const externalQueueRef = useRef<SavedPhoto[]>([]);
+  const externalWakeRef = useRef<(() => void) | null>(null);
   const [countdown, setCountdown] = useState(3);
   const [photoCount, setPhotoCount] = useState<number>(() => guestMode ? guestTemplate?.count ?? 1 : 1);
   const [captureMode, setCaptureMode] = useState<'photo' | 'video'>(() => guestMode && guestTemplate?.mediaMode === 'video' ? 'video' : 'photo');
@@ -180,6 +188,23 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     };
   }, []);
 
+  useEffect(() => window.koko.onExternalRoundPhoto(photo => {
+    externalQueueRef.current.push(photo);
+    externalWakeRef.current?.();
+  }), []);
+  useEffect(() => {
+    if (!externalMode) return;
+    let active = true;
+    const refresh = () => {
+      void Promise.all([window.koko.getCameraUsbStatus(), window.koko.getCameraFolderWatchStatus()]).then(([usb, folder]) => {
+        if (active) setExternalSources({ usbReady: usb.enabled && usb.state === 'ready', usbBusy: usb.enabled && usb.state === 'busy', folder: folder.enabled });
+      }).catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [externalMode]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (stream && video) void Promise.resolve(cameraManager.startPreview(video, stream)).then(() => {
@@ -225,6 +250,14 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     if (videoRef.current) cameraManager.stopPreview(videoRef.current);
     else cameraManager.disconnect();
     setStream(null);
+    if (deviceId === EXTERNAL_CAMERA_ID) {
+      setExternalMode(true);
+      setSelectedId(EXTERNAL_CAMERA_ID);
+      selectedIdRef.current = EXTERNAL_CAMERA_ID;
+      setCameraState('ready');
+      return;
+    }
+    setExternalMode(false);
     setCameraState('connecting');
     try {
       const next = await cameraManager.connect(deviceId || undefined);
@@ -255,17 +288,36 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
     setStream(null);
     setCameraState(devices.length ? 'detected' : 'not-found');
   };
+  function nextExternalPhoto(signal: AbortSignal): Promise<SavedPhoto> {
+    return new Promise<SavedPhoto>((resolve, reject) => {
+      const cleanup = () => { externalWakeRef.current = null; window.clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+      const check = () => {
+        const photo = externalQueueRef.current.shift();
+        if (photo) { cleanup(); resolve(photo); }
+      };
+      const onAbort = () => { cleanup(); reject(new DOMException('Capture canceled', 'AbortError')); };
+      const timer = window.setTimeout(() => {
+        cleanup();
+        reject(new Error(th ? 'รอรูปจากกล้องนานเกินไป ตรวจสาย USB หรือการตั้งค่าโฟลเดอร์ แล้วเริ่มรอบใหม่' : 'Timed out waiting for the camera photo. Check the USB cable or folder setting and start a new round.'));
+      }, EXTERNAL_PHOTO_WAIT_MS);
+      signal.addEventListener('abort', onAbort, { once: true });
+      externalWakeRef.current = check;
+      check();
+    });
+  }
+
   async function capture() {
     const video = videoRef.current;
-    if (!stream || !video || !onCapture || capturingRef.current) return;
+    if (!onCapture || capturingRef.current || (!externalMode && (!stream || !video))) return;
+    if (externalMode && captureMode !== 'photo') return;
     if (!storageReady || storageSpaceLow) {
       setCaptureError(storageSpaceLow
         ? (th ? `พื้นที่ว่างน้อยกว่า ${formatStorageSpace(MIN_FREE_PHOTO_STORAGE_BYTES)} กรุณาเพิ่มพื้นที่ก่อนเริ่มถ่าย` : `Free space is below ${formatStorageSpace(MIN_FREE_PHOTO_STORAGE_BYTES)}. Make more room before capturing.`)
         : (th ? 'เลือกโฟลเดอร์เก็บภาพก่อนเริ่มถ่าย' : 'Choose a photo storage folder before capturing.'));
       return;
     }
-    const label = stream.getVideoTracks()[0]?.label ?? '';
-    if (/EOS Webcam/i.test(label) && await videoLooksLikeNoSignal(video)) {
+    const label = stream?.getVideoTracks()[0]?.label ?? '';
+    if (!externalMode && video && /EOS Webcam/i.test(label) && await videoLooksLikeNoSignal(video)) {
       setCaptureError(th ? 'ไม่ได้รับภาพจากกล้อง Canon ตรวจสาย USB เปิดกล้อง และปิดโปรแกรมอื่นที่ใช้กล้องอยู่ (เช่น digiCamControl, EOS Utility)' : 'No picture from the Canon camera. Check the USB cable, turn the camera on, and close other apps using it (e.g. digiCamControl, EOS Utility).');
       return;
     }
@@ -299,7 +351,8 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       setRoundCloudUploaded(Boolean(grant.cloudShareUrl));
       authorizationRef.current = grant.authorizationId;
       if (controller.signal.aborted) throw new DOMException('Capture canceled', 'AbortError');
-      for (let value = countdown; value > 0; value--) {
+      if (externalMode) await window.koko.externalRoundStart(grant.authorizationId);
+      for (let value = externalMode ? 0 : countdown; value > 0; value--) {
         setCountdownValue(value);
         await waitForCaptureDelay(1000, controller.signal);
       }
@@ -308,18 +361,23 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         for (let index = 0; index < photoCount; index++) {
           if (controller.signal.aborted) throw new DOMException('Capture canceled', 'AbortError');
           setCaptureProgress(index + 1);
-          const blob = await cameraManager.captureStill(video, stream);
-          if (controller.signal.aborted) throw new DOMException('Capture canceled', 'AbortError');
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          const saved = await window.koko.savePhoto(bytes, grant.authorizationId);
+          let saved: SavedPhoto;
+          if (externalMode) saved = await nextExternalPhoto(controller.signal);
+          else {
+            const blob = await cameraManager.captureStill(video!, stream!);
+            if (controller.signal.aborted) throw new DOMException('Capture canceled', 'AbortError');
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            saved = await window.koko.savePhoto(bytes, grant.authorizationId);
+          }
           setRoundCloudUploaded(current => current && saved.cloudUploaded === true);
           setRoundPhotoIds(current => [...current, saved.id]);
           savedPhotoIds.push(saved.id);
           try { roundRecords.push((await window.koko.readPhoto(saved.id)).photo); } catch { /* The original is safely saved; preview loading can recover later. */ }
           try { await onCapture(saved); } catch { setCaptureNotice(th ? 'บันทึกภาพแล้ว แต่โหลดตัวอย่างภาพไม่สำเร็จ' : 'Photo saved, but the gallery preview did not refresh.'); }
-          if (index < photoCount - 1) await waitForCaptureDelay(650, controller.signal);
+          if (index < photoCount - 1 && !externalMode) await waitForCaptureDelay(650, controller.signal);
         }
       } else {
+        if (!stream || !video) throw new Error(th ? 'ยังไม่ได้เชื่อมต่อกล้อง' : 'Camera is not connected.');
         if (typeof MediaRecorder === 'undefined') throw new Error(th ? 'เครื่องนี้ไม่รองรับการอัดวิดีโอ' : 'Video recording is not supported on this device.');
         const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type));
         let recordingStream = stream;
@@ -466,6 +524,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       if (sessionId && !sessionFinished && !savedPhotoIds.length && !savedVideoId) {
         try { await window.koko.completeCaptureSession(sessionId, 'cancelled'); } catch { /* Session recovery handles an interrupted record. */ }
       }
+      if (externalMode) void window.koko.externalRoundStop().catch(() => undefined);
       if (authorizationRef.current) void window.koko.cancelCapture(authorizationRef.current).catch(() => undefined);
       authorizationRef.current = '';
       abortRef.current = null;
@@ -545,7 +604,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   };
 
   const storageSpaceLow = hasLowPhotoStorage(storageAvailableBytes);
-  const captureDisabled = capturing || !storageReady || storageSpaceLow || cameraState !== 'ready' || noSignal;
+  const captureDisabled = capturing || !storageReady || storageSpaceLow || cameraState !== 'ready' || noSignal || (externalMode && (captureMode !== 'photo' || !(externalSources.usbReady || externalSources.folder)));
   const roundPhotos = roundPhotoIds.map(id => photos.find(photo => photo.id === id)).filter((photo): photo is PhotoRecord => Boolean(photo));
   async function runSamplePhotoSession() {
     if (capturingRef.current || captureMode !== 'photo') return;
@@ -623,13 +682,14 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
         <span className={`camera-status-pill ${noSignal ? 'is-error' : cameraState === 'ready' ? 'is-ready' : cameraState === 'permission-denied' || cameraState === 'error' || cameraState === 'disconnected' ? 'is-error' : ''}`} role="status"><i />{noSignal ? (th ? 'ไม่ได้รับภาพจากกล้อง' : 'No picture from camera') : cameraState === 'ready' ? (th ? 'เชื่อมต่อแล้ว' : 'Connected') : labels[cameraState]}</span>
         <label className="camera-select-label"><span>{th ? 'กล้อง' : 'Camera'}</span><select value={selectedId} onChange={event => { const id = event.target.value; setSelectedId(id); selectedIdRef.current = id; void connect(id || undefined); }} disabled={cameraState === 'connecting' || capturing} aria-label={th ? 'เลือกกล้อง' : 'Select camera'}>
           <option value="">{th ? 'กล้องเริ่มต้น' : 'Default camera'}</option>
+          <option value={EXTERNAL_CAMERA_ID}>{th ? 'ถ่ายที่ตัวกล้อง (USB / โฟลเดอร์)' : 'Shoot on the camera (USB / folder)'}</option>
           {devices.map((device, index) => <option value={device.deviceId} key={device.deviceId || index}>{device.label || `${th ? 'กล้อง' : 'Camera'} ${index + 1}`}</option>)}
         </select></label>
         <button className="icon-button camera-settings-button" onClick={onOpenSettings} title={th ? 'ตั้งค่ากล้อง' : 'Camera settings'} aria-label={th ? 'ตั้งค่ากล้อง' : 'Camera settings'}><Icon name="settings" /></button>
       </div>
       <p className="camera-capability-note">{th ? 'กล้องเว็บแคมถ่ายภาพจากเฟรมสดและอัดคลิปสั้นลงเครื่องได้ ยังไม่สั่งชัตเตอร์กล้อง DSLR โดยตรง' : 'Webcams can save a still frame or record a short local clip. This does not trigger a DSLR shutter.'}</p>
       <div className={`camera-preview ${stream ? 'has-stream' : ''}`}>
-        {stream ? <div className="video-composition-preview" style={{ '--preview-aspect': previewVideoAspect } as React.CSSProperties}><video ref={videoRef} autoPlay muted playsInline aria-label={th ? 'ภาพสดจากกล้อง' : 'Live camera preview'} onLoadedMetadata={event => { const item = event.currentTarget; if (item.videoWidth && item.videoHeight) setCameraAspect(item.videoWidth / item.videoHeight); }} onResize={event => { const item = event.currentTarget; if (item.videoWidth && item.videoHeight) setCameraAspect(item.videoWidth / item.videoHeight); }} />{guestMode && captureMode === 'video' && guestTemplate?.videoOverlay && <img className="video-frame-preview" src={guestTemplate.videoOverlay} alt={th ? 'ตัวอย่างกรอบวิดีโอ' : 'Video frame preview'} style={guestTemplate.videoFrame ? { inset: 'auto', left: `${guestTemplate.videoFrame.x}%`, top: `${guestTemplate.videoFrame.y}%`, width: `${guestTemplate.videoFrame.width}%`, height: `${guestTemplate.videoFrame.height}%` } : undefined} />}{guestMode && captureMode === 'video' && guestTemplate?.videoImageLayers?.map(layer => <img key={layer.id} className="video-sticker-live" src={layer.src} alt="" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%` }} />)}{guestMode && captureMode === 'video' && guestTemplate?.videoTextLayers?.map(layer => <span key={layer.id} className="video-text-live" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontSize: `${layer.fontSize}cqh`, textAlign: layer.align }}>{layer.text}</span>)}</div> : <div className="camera-placeholder"><span className="placeholder-icon"><Icon name="camera" size={32} /></span><strong>{labels[cameraState]}</strong><small>{cameraState === 'permission-denied' ? (th ? 'อนุญาตการเข้าถึงกล้องในการตั้งค่าระบบ' : 'Allow camera access in system settings') : cameraState === 'not-found' ? (th ? 'เชื่อมต่อกล้องแล้วกดเริ่มภาพตัวอย่าง' : 'Connect a camera, then start the live preview') : (th ? 'เริ่มภาพตัวอย่างเพื่อจัดเฟรมภาพถ่าย' : 'Start the live preview to frame your photograph')}</small>{cameraState !== 'connecting' && <button className="preview-start" onClick={() => cameraState === 'permission-denied' && onOpenSettings ? onOpenSettings() : void connect(selectedId || undefined)}><Icon name={cameraState === 'permission-denied' && onOpenSettings ? 'settings' : 'camera'} size={16} />{cameraState === 'permission-denied' && onOpenSettings ? (th ? 'เปิดการตั้งค่าอุปกรณ์' : 'Device settings') : (th ? 'เริ่มภาพตัวอย่าง' : 'Start live preview')}</button>}</div>}
+        {externalMode ? <div className="camera-placeholder"><span className="placeholder-icon"><Icon name="camera" size={32} /></span><strong>{capturing ? (th ? `รอรูปจากกล้อง ${captureProgress || 1}/${photoCount} — กดชัตเตอร์ที่กล้อง` : `Waiting for camera photo ${captureProgress || 1}/${photoCount} — press the shutter`) : (th ? 'โหมดถ่ายที่ตัวกล้อง' : 'Shoot-on-camera mode')}</strong><small>{externalSources.usbReady || externalSources.folder ? (th ? 'กดปุ่มถ่ายเพื่อเริ่มรอบ แล้วกดชัตเตอร์ที่กล้อง ภาพเต็มความละเอียดจะเข้ามาเอง' : 'Press capture to start a round, then press the camera shutter. Full-resolution photos arrive on their own.') : externalSources.usbBusy ? (th ? 'พบกล้องแต่เข้าถึงรูปไม่ได้ ปิดโปรแกรมอื่นที่ใช้กล้อง (เช่น EOS Webcam Utility) แล้วลองใหม่' : 'Camera found but its photos are not reachable. Close other programs using it (e.g. EOS Webcam Utility).') : (th ? 'ยังไม่ได้เปิดรับรูปจากกล้อง ไปที่ตั้งค่า แล้วเปิด "ดึงภาพจากกล้องผ่าน USB" หรือเลือกโฟลเดอร์กล้อง' : 'No camera import is on. Open Settings and turn on USB import or choose a camera folder.')}</small></div> : stream ? <div className="video-composition-preview" style={{ '--preview-aspect': previewVideoAspect } as React.CSSProperties}><video ref={videoRef} autoPlay muted playsInline aria-label={th ? 'ภาพสดจากกล้อง' : 'Live camera preview'} onLoadedMetadata={event => { const item = event.currentTarget; if (item.videoWidth && item.videoHeight) setCameraAspect(item.videoWidth / item.videoHeight); }} onResize={event => { const item = event.currentTarget; if (item.videoWidth && item.videoHeight) setCameraAspect(item.videoWidth / item.videoHeight); }} />{guestMode && captureMode === 'video' && guestTemplate?.videoOverlay && <img className="video-frame-preview" src={guestTemplate.videoOverlay} alt={th ? 'ตัวอย่างกรอบวิดีโอ' : 'Video frame preview'} style={guestTemplate.videoFrame ? { inset: 'auto', left: `${guestTemplate.videoFrame.x}%`, top: `${guestTemplate.videoFrame.y}%`, width: `${guestTemplate.videoFrame.width}%`, height: `${guestTemplate.videoFrame.height}%` } : undefined} />}{guestMode && captureMode === 'video' && guestTemplate?.videoImageLayers?.map(layer => <img key={layer.id} className="video-sticker-live" src={layer.src} alt="" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, height: `${layer.height}%` }} />)}{guestMode && captureMode === 'video' && guestTemplate?.videoTextLayers?.map(layer => <span key={layer.id} className="video-text-live" style={{ left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.width}%`, color: layer.color, fontSize: `${layer.fontSize}cqh`, textAlign: layer.align }}>{layer.text}</span>)}</div> : <div className="camera-placeholder"><span className="placeholder-icon"><Icon name="camera" size={32} /></span><strong>{labels[cameraState]}</strong><small>{cameraState === 'permission-denied' ? (th ? 'อนุญาตการเข้าถึงกล้องในการตั้งค่าระบบ' : 'Allow camera access in system settings') : cameraState === 'not-found' ? (th ? 'เชื่อมต่อกล้องแล้วกดเริ่มภาพตัวอย่าง' : 'Connect a camera, then start the live preview') : (th ? 'เริ่มภาพตัวอย่างเพื่อจัดเฟรมภาพถ่าย' : 'Start the live preview to frame your photograph')}</small>{cameraState !== 'connecting' && <button className="preview-start" onClick={() => cameraState === 'permission-denied' && onOpenSettings ? onOpenSettings() : void connect(selectedId || undefined)}><Icon name={cameraState === 'permission-denied' && onOpenSettings ? 'settings' : 'camera'} size={16} />{cameraState === 'permission-denied' && onOpenSettings ? (th ? 'เปิดการตั้งค่าอุปกรณ์' : 'Device settings') : (th ? 'เริ่มภาพตัวอย่าง' : 'Start live preview')}</button>}</div>}
         <div className="preview-corners" aria-hidden="true"><i /><i /><i /><i /></div>
         <div className="preview-tools" aria-label={th ? 'เครื่องมือแสดงภาพ' : 'Preview tools'}>
           <button className={showGrid ? 'selected' : ''} onClick={() => setShowGrid(value => !value)} title={th ? 'เส้นช่วยจัดองค์ประกอบ' : 'Composition grid'} aria-label={th ? 'สลับเส้นช่วยจัดองค์ประกอบ' : 'Toggle composition grid'} aria-pressed={showGrid}><Icon name="grid" /></button>

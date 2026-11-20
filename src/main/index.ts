@@ -97,6 +97,8 @@ const cameraUsbConfigFile = () => path.join(dataDir(), 'camera-usb.json');
 const cameraUsbInbox = () => path.join(dataDir(), 'camera-usb-inbox');
 let cameraUsbWatcher: PhotoFolderWatcher | null = null;
 let cameraUsbImport: CameraUsbImport | null = null;
+// While a guest round waits for the photographer, imported camera photos are claimed into that round.
+let externalRoundAuthorization: string | null = null;
 let cameraFolderConfig: { folderPath: string | null; enabled: boolean } = { folderPath: null, enabled: false };
 let cameraFolderRestoreError: string | null = null;
 let eventStore: EventStore | null = null;
@@ -408,8 +410,25 @@ function cameraJpegImporter(storageRoot: string) {
     const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
     const size = decoded.getSize();
     if (decoded.isEmpty() || size.width !== dimensions.width || size.height !== dimensions.height) throw new Error('Camera file is not a valid JPEG image.');
-    const activeEvent = events().active();
-    return getPhotoStore(storageRoot).saveJpegFromSource(bytes, dimensions.width, dimensions.height, activeEvent?.id ?? null, sourceKey);
+    const authorizationId = externalRoundAuthorization;
+    let grant: { eventId: string | null; sessionId: string } | null = null;
+    if (authorizationId) { try { grant = captureAuthorizations.claim(authorizationId); } catch { grant = null; } }
+    try {
+      const eventId = grant ? grant.eventId : (events().active()?.id ?? null);
+      const photo = await getPhotoStore(storageRoot).saveJpegFromSource(bytes, dimensions.width, dimensions.height, eventId, sourceKey);
+      if (grant && authorizationId) {
+        captureSessions().addPhoto(grant.sessionId, photo.id);
+        const cloudUploaded = photoCloud().getUploadedPhotoIds(grant.sessionId).includes(photo.id);
+        void uploadCaptureSessionToCloud(grant.sessionId).catch(error => log('photo-cloud-upload-failed', error, { photoId: photo.id, sessionId: grant.sessionId }));
+        void uploadCaptureSessionToStudioCloud(grant.sessionId).catch(error => log('studio-cloud-upload-failed', error, { sessionId: grant.sessionId }));
+        captureAuthorizations.complete(authorizationId);
+        mainWindow?.webContents.send('koko:external-round-photo', { id: photo.id, width: photo.width, height: photo.height, byteLength: photo.byteLength, sha256: photo.sha256, savedAt: photo.savedAt, cloudUploaded, ...(photo.eventId ? { eventId: photo.eventId } : {}) });
+        log('external-round-photo-claimed', undefined, { byteLength: photo.byteLength });
+      }
+      return photo;
+    } finally {
+      if (grant && authorizationId) captureAuthorizations.release(authorizationId);
+    }
   };
 }
 function onCameraPhotoImported(fileName: string, photo: PhotoRecord) {
@@ -927,6 +946,13 @@ app.on('ready', () => {
     if (bounds.x === display.bounds.x && bounds.y === display.bounds.y) guestDisplayWindow.close();
   });
   ipcMain.handle('koko:photo-storage-status', event => { trusted(event); return photoStorageStatus(); });
+  ipcMain.handle('koko:external-round-start', (event, authorizationId: unknown) => {
+    trusted(event);
+    if (typeof authorizationId !== 'string' || !captureAuthorizations.getSessionId(authorizationId)) throw new Error('Capture authorization required');
+    externalRoundAuthorization = authorizationId;
+    return true;
+  });
+  ipcMain.handle('koko:external-round-stop', event => { trusted(event); externalRoundAuthorization = null; return true; });
   ipcMain.handle('koko:camera-usb-status', event => { trusted(event); return cameraUsbStatus(); });
   ipcMain.handle('koko:camera-usb-start', event => { trusted(event); return startCameraUsb(); });
   ipcMain.handle('koko:camera-usb-stop', event => { trusted(event); stopCameraUsb(); writeCameraUsbEnabled(false); return cameraUsbStatus(); });

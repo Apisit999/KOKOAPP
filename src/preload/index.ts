@@ -46,6 +46,13 @@ const bridge: Bridge = {
     ipcRenderer.on('koko:photo-cloud-progress', handler);
     return () => ipcRenderer.removeListener('koko:photo-cloud-progress', handler);
   },
+  externalRoundStart: authorizationId => ipcRenderer.invoke('koko:external-round-start', authorizationId),
+  externalRoundStop: () => ipcRenderer.invoke('koko:external-round-stop'),
+  onExternalRoundPhoto: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, photo: Parameters<typeof listener>[0]) => listener(photo);
+    ipcRenderer.on('koko:external-round-photo', handler);
+    return () => ipcRenderer.removeListener('koko:external-round-photo', handler);
+  },
   getCameraUsbStatus: () => ipcRenderer.invoke('koko:camera-usb-status'),
   startCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-start'),
   stopCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-stop'),
