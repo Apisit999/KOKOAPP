@@ -53,6 +53,9 @@ const bridge: Bridge = {
     ipcRenderer.on('koko:external-round-photo', handler);
     return () => ipcRenderer.removeListener('koko:external-round-photo', handler);
   },
+  getPhoneCameraStatus: () => ipcRenderer.invoke('koko:phone-camera-status'),
+  startPhoneCamera: () => ipcRenderer.invoke('koko:phone-camera-start'),
+  stopPhoneCamera: () => ipcRenderer.invoke('koko:phone-camera-stop'),
   getCameraUsbStatus: () => ipcRenderer.invoke('koko:camera-usb-status'),
   startCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-start'),
   stopCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-stop'),

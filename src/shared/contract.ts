@@ -12,6 +12,7 @@ export type Settings = { language: Language; highContrast: boolean; fullscreen: 
 export type AppStatus = { version: string; settings: Settings; lastError: string | null; guestExitPinConfigured: boolean; guestModeActive: boolean };
 export type GuestDisplayPayload = { language: Language; eventName: string; status: 'ready' | 'connecting' | 'disconnected' | 'countdown' | 'capturing' | 'review'; mediaMode: 'photo' | 'video'; countdown: number | null; resultCount: number; previewDataUrl: string; qrDataUrl: string; message: string };
 export type PhotoCloudProgress = { sessionId: string; completed: number; total: number; uploadedCount: number };
+export type PhoneCameraStatus = { enabled: boolean; url: string | null; receivedCount: number; lastError: string | null };
 export type CameraUsbStatus = { enabled: boolean; camera: string | null; state: 'off' | 'searching' | 'ready' | 'busy' | 'error'; importedCount: number; lastError: string | null };
 export type CameraFolderWatchStatus = { enabled: boolean; folderPath: string | null; importedCount: number; lastError: string | null };
 export type CameraFolderPhotoImport = { fileName: string; photo: PhotoRecord };
@@ -78,6 +79,9 @@ export type Bridge = {
   externalRoundStart(captureAuthorization: string): Promise<boolean>;
   externalRoundStop(): Promise<boolean>;
   onExternalRoundPhoto(listener: (photo: SavedPhoto) => void): () => void;
+  getPhoneCameraStatus(): Promise<PhoneCameraStatus>;
+  startPhoneCamera(): Promise<PhoneCameraStatus>;
+  stopPhoneCamera(): Promise<PhoneCameraStatus>;
   getCameraUsbStatus(): Promise<CameraUsbStatus>;
   startCameraUsb(): Promise<CameraUsbStatus>;
   stopCameraUsb(): Promise<CameraUsbStatus>;

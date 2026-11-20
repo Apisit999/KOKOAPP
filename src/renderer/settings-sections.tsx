@@ -1,5 +1,31 @@
 import { useEffect, useState } from 'react';
-import type { CameraFolderWatchStatus, CameraUsbStatus, KokoMemoryStatus } from '../shared/contract';
+import QRCode from 'qrcode';
+import type { CameraFolderWatchStatus, CameraUsbStatus, KokoMemoryStatus, PhoneCameraStatus } from '../shared/contract';
+
+export function PhoneCameraSettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
+  const [phone, setPhone] = useState<PhoneCameraStatus>({ enabled: false, url: null, receivedCount: 0, lastError: null });
+  const [qr, setQr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void window.koko.getPhoneCameraStatus().then(setPhone).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!phone.enabled) return;
+    const timer = window.setInterval(() => { void window.koko.getPhoneCameraStatus().then(setPhone).catch(() => undefined); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [phone.enabled]);
+  useEffect(() => {
+    let current = true;
+    if (!phone.url) { setQr(''); return; }
+    void QRCode.toDataURL(phone.url, { errorCorrectionLevel: 'M', margin: 2, width: 220 }).then(value => { if (current) setQr(value); }).catch(() => { if (current) setQr(''); });
+    return () => { current = false; };
+  }, [phone.url]);
+  async function toggle() {
+    setBusy(true);
+    try { setPhone(phone.enabled ? await window.koko.stopPhoneCamera() : await window.koko.startPhoneCamera()); }
+    catch (error) { onMessage(error instanceof Error ? error.message : (th ? 'เปิดโหมดมือถือเป็นกล้องไม่สำเร็จ' : 'Could not start phone camera.')); }
+    finally { setBusy(false); }
+  }
+  return <section className="storage-settings"><div><strong>{th ? 'ใช้มือถือเป็นกล้อง' : 'Phone as camera'}</strong><p>{th ? 'ให้มือถือเครื่องไหนก็ได้ (iPhone / Android) สแกน QR แล้วถ่ายรูปส่งเข้าแอปทันที ต้องเชื่อม Wi‑Fi เดียวกับคอมพิวเตอร์เครื่องนี้ ไม่ต้องใช้อินเทอร์เน็ต และไม่ต้องลงแอปในมือถือ' : 'Any phone (iPhone / Android) scans the QR code and sends photos straight in. It must be on the same Wi‑Fi as this computer. No internet and no phone app needed.'}</p>{phone.enabled && qr && <img src={qr} alt={th ? 'QR สำหรับเปิดกล้องมือถือ' : 'QR code to open the phone camera'} width={180} height={180} style={{ background: '#fff', borderRadius: 8, margin: '8px 0' }} />}{phone.enabled && phone.url && <small style={{ wordBreak: 'break-all' }}>{phone.url}</small>}{phone.enabled && <small>{th ? `รับรูปจากมือถือแล้ว ${phone.receivedCount} ภาพ · QR นี้ใช้ได้จนกว่าจะหยุดหรือปิดแอป อย่าแชร์ให้คนนอก` : `${phone.receivedCount} photo(s) received · this QR works until you stop or quit; do not share it outside the venue`}</small>}{phone.lastError && <small className="storage-warning">{phone.lastError}</small>}{phone.enabled && <small>{th ? 'ถ้า Windows ถามเรื่อง Firewall ให้กดอนุญาตสำหรับเครือข่ายส่วนตัว' : 'If Windows asks about the firewall, allow private networks.'}</small>}</div><button className="camera-secondary" onClick={() => void toggle()} disabled={busy || (!storageReady && !phone.enabled)}>{busy ? (th ? 'กำลังตั้งค่า…' : 'Working…') : phone.enabled ? (th ? 'หยุด' : 'Stop') : (th ? 'เปิดโหมดมือถือเป็นกล้อง' : 'Start phone camera')}</button></section>;
+}
 
 export function CameraUsbSettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
   const [usb, setUsb] = useState<CameraUsbStatus>({ enabled: false, camera: null, state: 'off', importedCount: 0, lastError: null });

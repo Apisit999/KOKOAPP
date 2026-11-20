@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, screen, session, shell, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, renameSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { Settings, AppStatus, GuestDisplayPayload } from '../shared/contract';
@@ -28,6 +28,7 @@ import { deleteCaptureRound } from './services/capture-round-delete';
 import { recoverStudioCloudSessions } from './services/studio-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
 import { CameraUsbImport } from './services/camera-usb-import';
+import { PhoneCameraServer } from './services/phone-camera-server';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
 import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
 import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
@@ -99,6 +100,12 @@ let cameraUsbWatcher: PhotoFolderWatcher | null = null;
 let cameraUsbImport: CameraUsbImport | null = null;
 // While a guest round waits for the photographer, imported camera photos are claimed into that round.
 let externalRoundAuthorization: string | null = null;
+const phoneCamera = new PhoneCameraServer(async bytes => {
+  const storageRoot = configuredPhotoRoot();
+  if (!storageRoot) throw new Error('Choose the local photo storage folder first.');
+  const photo = await cameraJpegImporter(storageRoot)(bytes, createHash('sha256').update(bytes).digest('hex'));
+  onCameraPhotoImported('phone.jpg', photo);
+});
 let cameraFolderConfig: { folderPath: string | null; enabled: boolean } = { folderPath: null, enabled: false };
 let cameraFolderRestoreError: string | null = null;
 let eventStore: EventStore | null = null;
@@ -946,6 +953,13 @@ app.on('ready', () => {
     if (bounds.x === display.bounds.x && bounds.y === display.bounds.y) guestDisplayWindow.close();
   });
   ipcMain.handle('koko:photo-storage-status', event => { trusted(event); return photoStorageStatus(); });
+  ipcMain.handle('koko:phone-camera-status', event => { trusted(event); return phoneCamera.status(); });
+  ipcMain.handle('koko:phone-camera-start', async event => {
+    trusted(event);
+    if (!configuredPhotoRoot()) throw new Error('Choose the local photo storage folder first.');
+    return phoneCamera.start();
+  });
+  ipcMain.handle('koko:phone-camera-stop', async event => { trusted(event); return phoneCamera.stop(); });
   ipcMain.handle('koko:external-round-start', (event, authorizationId: unknown) => {
     trusted(event);
     if (typeof authorizationId !== 'string' || !captureAuthorizations.getSessionId(authorizationId)) throw new Error('Capture authorization required');
@@ -1566,7 +1580,7 @@ app.on('ready', () => {
   setInterval(() => { void recoverStudioCloudPending(); }, 60_000);
   setInterval(() => { void drainKokoMemoryQueue().catch(error => log('kokomemory-queue-drain-failed', error)); }, 15_000);
 });
-app.on('before-quit', () => { cameraFolderWatcher?.stop(); stopCameraUsb(); });
+app.on('before-quit', () => { cameraFolderWatcher?.stop(); stopCameraUsb(); void phoneCamera.stop(); });
 app.on('window-all-closed', () => app.quit());
 process.on('uncaughtException', error => { lastError = 'An application error occurred'; log('uncaught-exception', error); });
 process.on('unhandledRejection', reason => { log('unhandled-rejection', reason); });
