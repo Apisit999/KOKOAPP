@@ -1,6 +1,43 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { CameraFolderWatchStatus, CameraUsbStatus, KokoMemoryStatus, PhoneCameraStatus } from '../shared/contract';
+import type { CameraFolderWatchStatus, CameraUsbStatus, GalleryCheck, GalleryInfo, KokoMemoryStatus, PhoneCameraStatus } from '../shared/contract';
+
+export function GuestGallerySettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
+  const [info, setInfo] = useState<GalleryInfo | null>(null);
+  const [address, setAddress] = useState('');
+  const [days, setDays] = useState(30);
+  const [check, setCheck] = useState<GalleryCheck | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = (value: GalleryInfo) => { setInfo(value); setAddress(value.config.publicBaseUrl ?? ''); setDays(value.config.ttlDays); };
+  useEffect(() => { void window.koko.getGalleryStatus().then(load).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!info?.server.enabled) return;
+    const timer = window.setInterval(() => { void window.koko.getGalleryStatus().then(value => setInfo(value)).catch(() => undefined); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [info?.server.enabled]);
+  async function save(enabled: boolean) {
+    setBusy(true); setCheck(null);
+    try { load(await window.koko.configureGallery({ enabled, publicBaseUrl: address.trim() || null, ttlDays: days })); }
+    catch (error) { onMessage(error instanceof Error ? error.message : (th ? 'ตั้งค่าแกลเลอรีไม่สำเร็จ' : 'Could not save the gallery settings.')); }
+    finally { setBusy(false); }
+  }
+  async function test() {
+    setBusy(true);
+    try { setCheck(await window.koko.checkGalleryPublicAddress()); } catch { setCheck({ ok: false, reason: 'error' }); } finally { setBusy(false); }
+  }
+  const enabled = Boolean(info?.server.enabled);
+  const target = info?.config.publicBaseUrl ?? info?.lanUrl ?? null;
+  return <section className="storage-settings"><div><strong>{th ? 'แกลเลอรีของแขก (QR ให้ทุกคนโหลดรูป)' : 'Guest gallery (QR for everyone to download)'}</strong>
+    <p>{th ? 'จบรอบแล้ว แอปสร้าง QR อัตโนมัติ ใครสแกนก็เปิดดูและบันทึกรูปของรอบนั้นลงมือถือได้ ไม่ต้องล็อกอินหรือลงแอป รูปถูกส่งจากเครื่องนี้โดยตรง ต้องเปิดเครื่องและแอปไว้ตลอด' : 'After each round the app makes a QR code. Anyone who scans it can view and save that round\'s photos, with no login or app. Photos are served from this computer, so keep it and the app running.'}</p>
+    <label>{th ? 'ที่อยู่สาธารณะ (เช่น https://photos.โดเมนของคุณ.com) — เว้นว่างถ้าใช้เฉพาะ Wi‑Fi ในงาน' : 'Public address (e.g. https://photos.yourdomain.com) — leave empty for venue Wi‑Fi only'}<input value={address} onChange={event => setAddress(event.target.value)} placeholder="https://photos.example.com" disabled={enabled} /></label>
+    <label>{th ? 'เก็บลิงก์ไว้กี่วัน' : 'Keep links for (days)'}<input type="number" min={1} max={365} value={days} onChange={event => setDays(Math.max(1, Math.min(365, Number(event.target.value) || 30)))} disabled={enabled} /></label>
+    {enabled && target && <small style={{ wordBreak: 'break-all' }}>{th ? `QR จะชี้ไปที่: ${target}` : `QR points to: ${target}`}</small>}
+    {enabled && !info?.config.publicBaseUrl && <small>{th ? 'ตอนนี้เปิดได้เฉพาะคนที่ต่อ Wi‑Fi เดียวกับเครื่องนี้ ถ้าต้องการให้เปิดได้จากทุกที่ ใส่ที่อยู่สาธารณะแล้วทำตามขั้นตอน Cloudflare Tunnel ในคู่มือ' : 'Right now only people on the same Wi‑Fi can open it. To open it from anywhere, enter a public address and follow the Cloudflare Tunnel guide.'}</small>}
+    {enabled && <small>{th ? `เปิดหน้าแกลเลอรี ${info?.server.servedPages ?? 0} ครั้ง · ส่งรูป ${info?.server.servedPhotos ?? 0} ไฟล์` : `${info?.server.servedPages ?? 0} page view(s) · ${info?.server.servedPhotos ?? 0} photo(s) served`}</small>}
+    {check && <small className={check.ok ? undefined : 'storage-warning'}>{check.ok ? (th ? '✓ เปิดจากอินเทอร์เน็ตได้แล้ว' : '✓ Reachable from the internet') : (th ? `✗ เปิดจากอินเทอร์เน็ตไม่ได้ (${check.reason ?? check.status ?? ''}) ตรวจว่า Tunnel ทำงานอยู่` : `✗ Not reachable from the internet (${check.reason ?? check.status ?? ''}). Check that the tunnel is running.`)}</small>}
+    {info?.server.lastError && <small className="storage-warning">{info.server.lastError}</small>}</div>
+    <div><button className="camera-secondary" onClick={() => void save(!enabled)} disabled={busy || (!storageReady && !enabled)}>{busy ? (th ? 'กำลังตั้งค่า…' : 'Working…') : enabled ? (th ? 'ปิดแกลเลอรี' : 'Turn off') : (th ? 'เปิดแกลเลอรีของแขก' : 'Turn on guest gallery')}</button> {enabled && info?.config.publicBaseUrl && <button className="camera-secondary" onClick={() => void test()} disabled={busy}>{th ? 'ตรวจว่าเปิดจากข้างนอกได้' : 'Check public access'}</button>}</div></section>;
+}
 
 export function PhoneCameraSettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
   const [phone, setPhone] = useState<PhoneCameraStatus>({ enabled: false, url: null, receivedCount: 0, lastError: null });

@@ -53,6 +53,9 @@ const bridge: Bridge = {
     ipcRenderer.on('koko:external-round-photo', handler);
     return () => ipcRenderer.removeListener('koko:external-round-photo', handler);
   },
+  getGalleryStatus: () => ipcRenderer.invoke('koko:gallery-status'),
+  configureGallery: value => ipcRenderer.invoke('koko:gallery-configure', value),
+  checkGalleryPublicAddress: () => ipcRenderer.invoke('koko:gallery-check'),
   getPhoneCameraStatus: () => ipcRenderer.invoke('koko:phone-camera-status'),
   startPhoneCamera: () => ipcRenderer.invoke('koko:phone-camera-start'),
   stopPhoneCamera: () => ipcRenderer.invoke('koko:phone-camera-stop'),

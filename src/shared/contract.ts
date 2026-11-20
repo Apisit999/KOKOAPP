@@ -12,6 +12,9 @@ export type Settings = { language: Language; highContrast: boolean; fullscreen: 
 export type AppStatus = { version: string; settings: Settings; lastError: string | null; guestExitPinConfigured: boolean; guestModeActive: boolean };
 export type GuestDisplayPayload = { language: Language; eventName: string; status: 'ready' | 'connecting' | 'disconnected' | 'countdown' | 'capturing' | 'review'; mediaMode: 'photo' | 'video'; countdown: number | null; resultCount: number; previewDataUrl: string; qrDataUrl: string; message: string };
 export type PhotoCloudProgress = { sessionId: string; completed: number; total: number; uploadedCount: number };
+export type GalleryConfig = { enabled: boolean; port: number; publicBaseUrl: string | null; ttlDays: number };
+export type GalleryInfo = { config: GalleryConfig; server: { enabled: boolean; port: number | null; lastError: string | null; servedPhotos: number; servedPages: number }; lanUrl: string | null };
+export type GalleryCheck = { ok: boolean; status?: number; reason?: string };
 export type PhoneCameraStatus = { enabled: boolean; url: string | null; receivedCount: number; lastError: string | null };
 export type CameraUsbStatus = { enabled: boolean; camera: string | null; state: 'off' | 'searching' | 'ready' | 'busy' | 'error'; importedCount: number; lastError: string | null };
 export type CameraFolderWatchStatus = { enabled: boolean; folderPath: string | null; importedCount: number; lastError: string | null };
@@ -74,11 +77,14 @@ export type Bridge = {
   exportVideo(id: string): Promise<boolean>;
   listCaptureSessions(limit?: number, offset?: number): Promise<CaptureSessionRecord[]>;
   completeCaptureSession(sessionId: string, status: 'review' | 'confirmed' | 'cancelled' | 'retaken'): Promise<CaptureSessionRecord | null>;
-  syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number; cloudAvailable?: boolean }>;
+  syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number; cloudAvailable?: boolean; boothHosted?: boolean }>;
   onPhotoCloudProgress(listener: (progress: PhotoCloudProgress) => void): () => void;
   externalRoundStart(captureAuthorization: string): Promise<boolean>;
   externalRoundStop(): Promise<boolean>;
   onExternalRoundPhoto(listener: (photo: SavedPhoto) => void): () => void;
+  getGalleryStatus(): Promise<GalleryInfo>;
+  configureGallery(settings: { enabled: boolean; publicBaseUrl?: string | null; ttlDays?: number }): Promise<GalleryInfo>;
+  checkGalleryPublicAddress(): Promise<GalleryCheck>;
   getPhoneCameraStatus(): Promise<PhoneCameraStatus>;
   startPhoneCamera(): Promise<PhoneCameraStatus>;
   stopPhoneCamera(): Promise<PhoneCameraStatus>;

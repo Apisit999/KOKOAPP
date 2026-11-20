@@ -28,7 +28,9 @@ import { deleteCaptureRound } from './services/capture-round-delete';
 import { recoverStudioCloudSessions } from './services/studio-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
 import { CameraUsbImport } from './services/camera-usb-import';
-import { PhoneCameraServer } from './services/phone-camera-server';
+import { PhoneCameraServer, lanAddress } from './services/phone-camera-server';
+import { GalleryTokenStore } from './services/gallery-token-store';
+import { GuestGalleryServer } from './services/guest-gallery-server';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
 import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
 import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
@@ -98,6 +100,80 @@ const cameraUsbConfigFile = () => path.join(dataDir(), 'camera-usb.json');
 const cameraUsbInbox = () => path.join(dataDir(), 'camera-usb-inbox');
 let cameraUsbWatcher: PhotoFolderWatcher | null = null;
 let cameraUsbImport: CameraUsbImport | null = null;
+// Guest gallery: the booth PC serves each round's photos behind a secret link (optionally published through a tunnel on the owner's domain).
+type GalleryConfig = { enabled: boolean; port: number; publicBaseUrl: string | null; ttlDays: number };
+const GALLERY_DEFAULTS: GalleryConfig = { enabled: false, port: 47831, publicBaseUrl: null, ttlDays: 30 };
+const galleryConfigFile = () => path.join(dataDir(), 'local-gallery.json');
+let galleryTokenStore: GalleryTokenStore | null = null;
+function galleryTokens() { if (!galleryTokenStore) galleryTokenStore = new GalleryTokenStore(dataDir()); return galleryTokenStore; }
+function validPublicBase(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || value.length > 200) throw new Error('Public address is not valid.');
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw new Error('Public address must look like https://photos.yourdomain.com'); }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) throw new Error('Public address must be an http(s) address without a password.');
+  return url.origin;
+}
+function readGalleryConfig(): GalleryConfig {
+  try {
+    const value = JSON.parse(readFileSync(galleryConfigFile(), 'utf8')) as Partial<GalleryConfig>;
+    const port = Number.isInteger(value.port) && (value.port as number) >= 1024 && (value.port as number) <= 65535 ? (value.port as number) : GALLERY_DEFAULTS.port;
+    const ttlDays = Number.isInteger(value.ttlDays) && (value.ttlDays as number) >= 1 && (value.ttlDays as number) <= 365 ? (value.ttlDays as number) : GALLERY_DEFAULTS.ttlDays;
+    return { enabled: value.enabled === true, port, publicBaseUrl: validPublicBase(value.publicBaseUrl), ttlDays };
+  } catch { return { ...GALLERY_DEFAULTS }; }
+}
+function writeGalleryConfig(config: GalleryConfig) {
+  mkdirSync(dataDir(), { recursive: true });
+  writeFileSync(galleryConfigFile(), JSON.stringify({ version: 1, ...config }), { encoding: 'utf8', mode: 0o600 });
+}
+function galleryPhotoIds(session: { photoIds: string[]; compositionPhotoId?: string | null }) {
+  return [...(session.compositionPhotoId ? [session.compositionPhotoId] : []), ...session.photoIds];
+}
+const guestGallery = new GuestGalleryServer({
+  resolve: token => {
+    const hit = galleryTokens().resolve(token);
+    if (!hit) return null;
+    const session = captureSessions().get(hit.sessionId);
+    if (!session || (session.status !== 'review' && session.status !== 'confirmed')) return null;
+    const ids = galleryPhotoIds(session);
+    if (!ids.length) return null;
+    return { title: (session.eventId ? events().get(session.eventId)?.name : null) ?? 'KOKO Photobooth', photoCount: ids.length, expiresAt: hit.expiresAt };
+  },
+  readPhoto: (token, index) => {
+    const hit = galleryTokens().resolve(token);
+    const root = configuredPhotoRoot();
+    const session = hit ? captureSessions().get(hit.sessionId) : null;
+    const id = session ? galleryPhotoIds(session)[index] : undefined;
+    if (!root || !id) return null;
+    try { return { bytes: getPhotoStore(root).readPhoto(id).bytes }; } catch { return null; }
+  },
+  render: (bytes, maxSide) => {
+    const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+    const { width, height } = image.getSize();
+    const scale = Math.min(1, maxSide / Math.max(width, height));
+    return (scale < 1 ? image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' }) : image).toJPEG(90);
+  }
+});
+function galleryBaseUrl(config = readGalleryConfig()) {
+  if (config.publicBaseUrl) return config.publicBaseUrl;
+  const address = lanAddress();
+  return address ? `http://${address}:${config.port}` : null;
+}
+/** Guest link for a finished round when the booth PC is the gallery server; null when the gallery is off. */
+function localGalleryShare(sessionId: string): string | null {
+  const config = readGalleryConfig();
+  if (!config.enabled || !guestGallery.status().enabled) return null;
+  const base = galleryBaseUrl(config);
+  if (!base) return null;
+  return `${base}/s/${galleryTokens().forSession(sessionId, config.ttlDays * 86_400_000)}?openExternalBrowser=1`;
+}
+async function startGuestGallery(config = readGalleryConfig()) {
+  return guestGallery.start(config.port);
+}
+function galleryInfo() {
+  const config = readGalleryConfig();
+  return { config, server: guestGallery.status(), lanUrl: lanAddress() ? `http://${lanAddress()}:${config.port}` : null };
+}
 // While a guest round waits for the photographer, imported camera photos are claimed into that round.
 let externalRoundAuthorization: string | null = null;
 const phoneCamera = new PhoneCameraServer(async bytes => {
@@ -908,6 +984,7 @@ app.on('ready', () => {
     const share = accountShare
       ? { shareUrl: accountShare.revoked ? null : accountShare.url, expiresAt: accountShare.expiresAt ?? null, shortCode: accountShare.revoked ? null : accountShare.shortCode ?? null, eventUrl: accountShare.revoked ? null : accountShare.eventUrl ?? null }
       : { ...photoCloud().getShareStatus(sessionId), shortCode: null, eventUrl: null };
+    if (!share.shareUrl) { const local = localGalleryShare(sessionId); if (local) share.shareUrl = local; }
     if (!share.shareUrl) throw new Error('This round has no guest link yet. Upload it first.');
     await sendReceipt(settings.printer, repeat(buildReceipt({ shareUrl: share.shareUrl, shortCode: share.shortCode, eventUrl: share.eventUrl, expiresAt: share.expiresAt, paper: settings.paper, captionRaster, footerRaster, logoRaster: readReceiptLogo() })));
   });
@@ -953,6 +1030,31 @@ app.on('ready', () => {
     if (bounds.x === display.bounds.x && bounds.y === display.bounds.y) guestDisplayWindow.close();
   });
   ipcMain.handle('koko:photo-storage-status', event => { trusted(event); return photoStorageStatus(); });
+  ipcMain.handle('koko:gallery-status', event => { trusted(event); return galleryInfo(); });
+  ipcMain.handle('koko:gallery-configure', async (event, value: unknown) => {
+    trusted(event);
+    if (!value || typeof value !== 'object') throw new Error('Invalid gallery settings');
+    const input = value as Record<string, unknown>;
+    const current = readGalleryConfig();
+    const ttlDays = input.ttlDays === undefined ? current.ttlDays : input.ttlDays;
+    if (!Number.isInteger(ttlDays) || (ttlDays as number) < 1 || (ttlDays as number) > 365) throw new Error('Keep links for 1 to 365 days.');
+    const next: GalleryConfig = { enabled: input.enabled === true, port: current.port, publicBaseUrl: input.publicBaseUrl === undefined ? current.publicBaseUrl : validPublicBase(input.publicBaseUrl), ttlDays: ttlDays as number };
+    if (next.enabled && !configuredPhotoRoot()) throw new Error('Choose the local photo storage folder first.');
+    if (next.enabled) await startGuestGallery(next); else await guestGallery.stop();
+    writeGalleryConfig(next);
+    return galleryInfo();
+  });
+  ipcMain.handle('koko:gallery-check', async event => {
+    trusted(event);
+    const config = readGalleryConfig();
+    const base = config.publicBaseUrl;
+    if (!base) return { ok: false, reason: 'no-public-address' };
+    if (!guestGallery.status().enabled) return { ok: false, reason: 'gallery-off' };
+    try {
+      const response = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+      return { ok: response.ok && (await response.text()).trim() === 'ok', status: response.status };
+    } catch (error) { return { ok: false, reason: error instanceof Error ? error.message.slice(0, 160) : 'unreachable' }; }
+  });
   ipcMain.handle('koko:phone-camera-status', event => { trusted(event); return phoneCamera.status(); });
   ipcMain.handle('koko:phone-camera-start', async event => {
     trusted(event);
@@ -1241,6 +1343,7 @@ app.on('ready', () => {
       trashVideo: id => getVideoStore(root).moveVideoToTrash(id, videoPath => shell.trashItem(videoPath)),
       markDeleted: () => { captureSessions().markMediaDeleted(sessionId); }
     });
+    galleryTokens().revokeSession(sessionId);
     log('capture-round-deleted', undefined, { sessionId, photos: result.photos, videos: result.videos, failed: result.failed.length });
     return { cancelled: false, photos: result.photos, videos: result.videos, failed: result.failed.length, done: result.done };
   });
@@ -1299,11 +1402,17 @@ app.on('ready', () => {
       const videoCount = (session.videoIds ?? []).length;
       if (!event.sender.isDestroyed()) event.sender.send('koko:photo-cloud-progress', { sessionId: session.id, completed: accountPhotoIds.length + videoCount, total: accountPhotoIds.length + videoCount, uploadedCount: uploadedNow });
       // Videos are not stored in the account yet, so they count as not uploaded instead of pretending to be done.
-      return { shareUrl: accountShare?.url ?? null, uploadedCount: uploadedNow, mediaCount: accountPhotoIds.length + videoCount, photoCount: accountPhotoIds.length, videoCount };
+      const fallbackShare = accountShare?.url ? null : localGalleryShare(session.id);
+      return { shareUrl: accountShare?.url ?? fallbackShare, boothHosted: Boolean(fallbackShare) || undefined, uploadedCount: fallbackShare ? accountPhotoIds.length : uploadedNow, mediaCount: accountPhotoIds.length + videoCount, photoCount: accountPhotoIds.length, videoCount };
     }
     // The Free plan has no cloud albums. Say so instead of attempting an upload that is bound to be rejected.
     const cloudLicense = await licenses().getStatus().catch(() => null);
     if (cloudLicense && !cloudLicense.features.includes('cloud_sync')) {
+      const localShare = localGalleryShare(session.id);
+      if (localShare) {
+        const localCount = galleryPhotoIds(session).length;
+        return { shareUrl: localShare, boothHosted: true, uploadedCount: localCount, mediaCount: localCount + (session.videoIds ?? []).length, photoCount: session.photoIds.length, videoCount: (session.videoIds ?? []).length };
+      }
       return { shareUrl: null, uploadedCount: 0, mediaCount: 0, photoCount: session.photoIds.length, videoCount: (session.videoIds ?? []).length, cloudAvailable: false };
     }
     let shareUrl = photoCloud().getShareUrl(session.id);
@@ -1571,6 +1680,7 @@ app.on('ready', () => {
     try { startCameraFolderWatcher(cameraFolderConfig.folderPath); }
     catch (error) { cameraFolderRestoreError = error instanceof Error ? error.message : 'Could not restore the camera folder'; log('camera-folder-restore-failed', error); writeCameraFolderConfig(cameraFolderConfig.folderPath, false); }
   }
+  if (readGalleryConfig().enabled && configuredPhotoRoot()) startGuestGallery().catch(error => log('guest-gallery-start-failed', error));
   if (readCameraUsbEnabled()) {
     try { startCameraUsb(); }
     catch (error) { log('camera-usb-restore-failed', error); writeCameraUsbEnabled(false); }
@@ -1580,7 +1690,7 @@ app.on('ready', () => {
   setInterval(() => { void recoverStudioCloudPending(); }, 60_000);
   setInterval(() => { void drainKokoMemoryQueue().catch(error => log('kokomemory-queue-drain-failed', error)); }, 15_000);
 });
-app.on('before-quit', () => { cameraFolderWatcher?.stop(); stopCameraUsb(); void phoneCamera.stop(); });
+app.on('before-quit', () => { cameraFolderWatcher?.stop(); stopCameraUsb(); void phoneCamera.stop(); void guestGallery.stop(); });
 app.on('window-all-closed', () => app.quit());
 process.on('uncaughtException', error => { lastError = 'An application error occurred'; log('uncaught-exception', error); });
 process.on('unhandledRejection', reason => { log('unhandled-rejection', reason); });
