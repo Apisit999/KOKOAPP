@@ -46,6 +46,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraAspect, setCameraAspect] = useState<number | null>(null);
   const [cameraState, setCameraState] = useState<CameraStatus>('searching');
+  const [noSignal, setNoSignal] = useState(false);
   const [countdown, setCountdown] = useState(3);
   const [photoCount, setPhotoCount] = useState<number>(() => guestMode ? guestTemplate?.count ?? 1 : 1);
   const [captureMode, setCaptureMode] = useState<'photo' | 'video'>(() => guestMode && guestTemplate?.mediaMode === 'video' ? 'video' : 'photo');
@@ -98,10 +99,10 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   // Guests should never have to find a "start camera" button: open the preview as soon as a camera is found.
   useEffect(() => { if (guestMode && cameraState === 'detected' && !stream) void connect(selectedIdRef.current || undefined); }, [guestMode, cameraState, stream]);
   useEffect(() => {
-    const status: GuestDisplayPayload['status'] = reviewing ? 'review' : countdownValue !== null ? 'countdown' : capturing || recordingVideo ? 'capturing' : cameraState === 'ready' ? 'ready' : cameraState === 'connecting' || cameraState === 'searching' ? 'connecting' : 'disconnected';
+    const status: GuestDisplayPayload['status'] = reviewing ? 'review' : countdownValue !== null ? 'countdown' : capturing || recordingVideo ? 'capturing' : cameraState === 'ready' && !noSignal ? 'ready' : cameraState === 'connecting' || cameraState === 'searching' ? 'connecting' : 'disconnected';
     const message = reviewing
       ? roundCloudUploaded && roundShareUrl ? (th ? 'สแกน QR เพื่อรับภาพและวิดีโอ' : 'Scan the QR to receive your photos and videos') : (th ? 'กำลังเตรียมผลงาน กรุณารอสักครู่' : 'Preparing your captures. Please wait.')
-      : cameraState === 'ready' ? (th ? 'พร้อมแล้ว เริ่มถ่ายได้เลย' : 'Ready when you are') : (th ? 'กรุณารอเจ้าหน้าที่ตรวจสอบกล้อง' : 'Please wait while the attendant checks the camera');
+      : cameraState === 'ready' && !noSignal ? (th ? 'พร้อมแล้ว เริ่มถ่ายได้เลย' : 'Ready when you are') : (th ? 'กรุณารอเจ้าหน้าที่ตรวจสอบกล้อง' : 'Please wait while the attendant checks the camera');
     guestDisplayPayloadRef.current = {
       language: th ? 'th' : 'en', eventName: activeEventName ?? '', status, mediaMode: captureMode,
       countdown: countdownValue, resultCount: reviewing ? reviewCount : roundPhotoIds.length + (roundVideoId ? 1 : 0),
@@ -109,7 +110,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       qrDataUrl: reviewing && roundShareUrl ? shareQrDataUrl : '', message
     };
     if (guestDisplayActive) void window.koko.publishGuestDisplay(guestDisplayPayloadRef.current).catch(() => undefined);
-  }, [guestDisplayActive, th, activeEventName, reviewing, countdownValue, capturing, recordingVideo, cameraState, roundCloudUploaded, roundShareUrl, captureMode, reviewCount, roundPhotoIds.length, roundVideoId, shareQrDataUrl]);
+  }, [guestDisplayActive, th, activeEventName, reviewing, countdownValue, capturing, recordingVideo, cameraState, noSignal, roundCloudUploaded, roundShareUrl, captureMode, reviewCount, roundPhotoIds.length, roundVideoId, shareQrDataUrl]);
   useEffect(() => {
     if (!guestDisplayActive || cameraState !== 'ready' || !stream) return;
     const video = videoRef.current;
@@ -189,6 +190,22 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
       setCameraState('error');
     });
   }, [stream]);
+
+  // Canon EOS Webcam Utility keeps the device "connected" even when the camera is gone,
+  // so watch the picture itself and show the real state on the status pill.
+  useEffect(() => {
+    setNoSignal(false);
+    if (!stream || cameraState !== 'ready' || !/EOS Webcam/i.test(stream.getVideoTracks()[0]?.label ?? '')) return;
+    let active = true;
+    let running = false;
+    const timer = setInterval(() => {
+      const video = videoRef.current;
+      if (running || !video || capturingRef.current) return;
+      running = true;
+      void videoLooksLikeNoSignal(video).then(value => { if (active) setNoSignal(value); }).finally(() => { running = false; });
+    }, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, [stream, cameraState]);
 
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -528,7 +545,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   };
 
   const storageSpaceLow = hasLowPhotoStorage(storageAvailableBytes);
-  const captureDisabled = capturing || !storageReady || storageSpaceLow || cameraState !== 'ready';
+  const captureDisabled = capturing || !storageReady || storageSpaceLow || cameraState !== 'ready' || noSignal;
   const roundPhotos = roundPhotoIds.map(id => photos.find(photo => photo.id === id)).filter((photo): photo is PhotoRecord => Boolean(photo));
   async function runSamplePhotoSession() {
     if (capturingRef.current || captureMode !== 'photo') return;
@@ -603,7 +620,7 @@ export function CameraPanel({ th, onStatus, onCapture, onVideoCapture, storageRe
   return <section className={`camera-panel ${onCapture ? 'studio-layout' : 'diagnostics-layout'} ${guestMode ? 'guest-camera-panel' : ''} ${guestMode && reviewing ? 'guest-reviewing' : ''}`} aria-label={th ? 'กล้อง' : 'Camera'}>
     <div className="studio-left">
       <div className="camera-selector-row">
-        <span className={`camera-status-pill ${cameraState === 'ready' ? 'is-ready' : cameraState === 'permission-denied' || cameraState === 'error' || cameraState === 'disconnected' ? 'is-error' : ''}`} role="status"><i />{cameraState === 'ready' ? (th ? 'เชื่อมต่อแล้ว' : 'Connected') : labels[cameraState]}</span>
+        <span className={`camera-status-pill ${noSignal ? 'is-error' : cameraState === 'ready' ? 'is-ready' : cameraState === 'permission-denied' || cameraState === 'error' || cameraState === 'disconnected' ? 'is-error' : ''}`} role="status"><i />{noSignal ? (th ? 'ไม่ได้รับภาพจากกล้อง' : 'No picture from camera') : cameraState === 'ready' ? (th ? 'เชื่อมต่อแล้ว' : 'Connected') : labels[cameraState]}</span>
         <label className="camera-select-label"><span>{th ? 'กล้อง' : 'Camera'}</span><select value={selectedId} onChange={event => { const id = event.target.value; setSelectedId(id); selectedIdRef.current = id; void connect(id || undefined); }} disabled={cameraState === 'connecting' || capturing} aria-label={th ? 'เลือกกล้อง' : 'Select camera'}>
           <option value="">{th ? 'กล้องเริ่มต้น' : 'Default camera'}</option>
           {devices.map((device, index) => <option value={device.deviceId} key={device.deviceId || index}>{device.label || `${th ? 'กล้อง' : 'Camera'} ${index + 1}`}</option>)}

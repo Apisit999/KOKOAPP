@@ -44,7 +44,8 @@ export class BrowserCameraAdapter implements CameraAdapter {
     try {
       return await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: deviceId ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } }
+        // Ask for up to 4K so HDMI capture cards and good webcams give their best picture.
+        video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } }
       });
     } catch (error) {
       const name = error instanceof DOMException ? error.name : '';
