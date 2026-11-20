@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { Settings, AppStatus, GuestDisplayPayload } from '../shared/contract';
-import { PhotoStore, validateStorageRoot } from './services/photo-store';
+import { PhotoStore, validateStorageRoot, type PhotoRecord } from './services/photo-store';
 import { VideoStore } from './services/video-store';
 import { FontStore, MAX_FONT_BYTES } from './services/font-store';
 import { normalizeSlideshowSettings, pickSlideshowPhotoIds } from '../shared/slideshow';
@@ -27,6 +27,7 @@ import { RetryBackoff } from './services/retry-backoff';
 import { deleteCaptureRound } from './services/capture-round-delete';
 import { recoverStudioCloudSessions } from './services/studio-cloud-recovery';
 import { PhotoFolderWatcher } from './services/photo-folder-watcher';
+import { CameraUsbImport } from './services/camera-usb-import';
 import { KokoMemoryConnectionStore } from './services/koko-memory-connection-store';
 import { KokoMemorySyncStore } from './services/koko-memory-sync-store';
 import { KokoMemoryApiClient, KokoMemoryApiError } from './services/koko-memory-client';
@@ -92,6 +93,10 @@ const photoStores = new Map<string, PhotoStore>();
 const videoStores = new Map<string, VideoStore>();
 const captureAuthorizations = new CaptureAuthorizationRegistry();
 let cameraFolderWatcher: PhotoFolderWatcher | null = null;
+const cameraUsbConfigFile = () => path.join(dataDir(), 'camera-usb.json');
+const cameraUsbInbox = () => path.join(dataDir(), 'camera-usb-inbox');
+let cameraUsbWatcher: PhotoFolderWatcher | null = null;
+let cameraUsbImport: CameraUsbImport | null = null;
 let cameraFolderConfig: { folderPath: string | null; enabled: boolean } = { folderPath: null, enabled: false };
 let cameraFolderRestoreError: string | null = null;
 let eventStore: EventStore | null = null;
@@ -396,14 +401,8 @@ function pathsOverlap(left: string, right: string) {
   const within = (base: string, target: string) => { const value = relative(base, target); return value === '' || (value !== '..' && !value.startsWith(`..${path.sep}`) && !path.isAbsolute(value)); };
   return within(a, b) || within(b, a);
 }
-function startCameraFolderWatcher(folderPath: string) {
-  const storageRoot = configuredPhotoRoot();
-  if (!storageRoot) throw new Error('Choose the local photo storage folder first.');
-  const source = realpathSync(folderPath);
-  const storage = realpathSync(storageRoot);
-  if (pathsOverlap(source, storage)) throw new Error('Camera folder and photo storage must be separate folders.');
-  const previousWatcher = cameraFolderWatcher;
-  const nextWatcher = new PhotoFolderWatcher(dataDir(), async (bytes, sourceKey) => {
+function cameraJpegImporter(storageRoot: string) {
+  return async (bytes: Uint8Array, sourceKey: string) => {
     if (bytes.byteLength < 4 || bytes.byteLength > 100 * 1024 * 1024 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) throw new Error('Only complete JPEG photos up to 100 MB can be imported.');
     const dimensions = jpegDimensions(Buffer.from(bytes));
     const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
@@ -411,10 +410,52 @@ function startCameraFolderWatcher(folderPath: string) {
     if (decoded.isEmpty() || size.width !== dimensions.width || size.height !== dimensions.height) throw new Error('Camera file is not a valid JPEG image.');
     const activeEvent = events().active();
     return getPhotoStore(storageRoot).saveJpegFromSource(bytes, dimensions.width, dimensions.height, activeEvent?.id ?? null, sourceKey);
-  }, (fileName, photo) => {
-    mainWindow?.webContents.send('koko:camera-folder-photo-import', { fileName, photo });
-    log('camera-folder-photo-imported', undefined, { byteLength: photo.byteLength, width: photo.width, height: photo.height });
-  });
+  };
+}
+function onCameraPhotoImported(fileName: string, photo: PhotoRecord) {
+  mainWindow?.webContents.send('koko:camera-folder-photo-import', { fileName, photo });
+  log('camera-folder-photo-imported', undefined, { byteLength: photo.byteLength, width: photo.width, height: photo.height });
+}
+function writeCameraUsbEnabled(enabled: boolean) {
+  mkdirSync(dataDir(), { recursive: true });
+  writeFileSync(cameraUsbConfigFile(), JSON.stringify({ version: 1, enabled }), { encoding: 'utf8', mode: 0o600 });
+}
+function readCameraUsbEnabled() {
+  try { return (JSON.parse(readFileSync(cameraUsbConfigFile(), 'utf8')) as { enabled?: unknown }).enabled === true; } catch { return false; }
+}
+function cameraUsbStatus() {
+  const usb = cameraUsbImport?.status() ?? { enabled: false, camera: null, state: 'off' as const, importedCount: 0, lastError: null };
+  const watch = cameraUsbWatcher?.status();
+  return { ...usb, importedCount: watch?.importedCount ?? 0, lastError: usb.lastError ?? watch?.lastError ?? null };
+}
+function stopCameraUsb() {
+  cameraUsbImport?.stop();
+  cameraUsbWatcher?.stop();
+  cameraUsbImport = null;
+  cameraUsbWatcher = null;
+}
+function startCameraUsb() {
+  const storageRoot = configuredPhotoRoot();
+  if (!storageRoot) throw new Error('Choose the local photo storage folder first.');
+  stopCameraUsb();
+  const inbox = cameraUsbInbox();
+  mkdirSync(inbox, { recursive: true });
+  const watcher = new PhotoFolderWatcher(dataDir(), cameraJpegImporter(storageRoot), onCameraPhotoImported, 'camera-usb-imports.json');
+  watcher.start(inbox);
+  cameraUsbWatcher = watcher;
+  cameraUsbImport = new CameraUsbImport(status => { if (status.lastError) log('camera-usb-error', new Error(status.lastError)); });
+  cameraUsbImport.start(inbox);
+  writeCameraUsbEnabled(true);
+  return cameraUsbStatus();
+}
+function startCameraFolderWatcher(folderPath: string) {
+  const storageRoot = configuredPhotoRoot();
+  if (!storageRoot) throw new Error('Choose the local photo storage folder first.');
+  const source = realpathSync(folderPath);
+  const storage = realpathSync(storageRoot);
+  if (pathsOverlap(source, storage)) throw new Error('Camera folder and photo storage must be separate folders.');
+  const previousWatcher = cameraFolderWatcher;
+  const nextWatcher = new PhotoFolderWatcher(dataDir(), cameraJpegImporter(storageRoot), onCameraPhotoImported);
   try {
     const status = nextWatcher.start(source);
     writeCameraFolderConfig(source, true);
@@ -886,6 +927,9 @@ app.on('ready', () => {
     if (bounds.x === display.bounds.x && bounds.y === display.bounds.y) guestDisplayWindow.close();
   });
   ipcMain.handle('koko:photo-storage-status', event => { trusted(event); return photoStorageStatus(); });
+  ipcMain.handle('koko:camera-usb-status', event => { trusted(event); return cameraUsbStatus(); });
+  ipcMain.handle('koko:camera-usb-start', event => { trusted(event); return startCameraUsb(); });
+  ipcMain.handle('koko:camera-usb-stop', event => { trusted(event); stopCameraUsb(); writeCameraUsbEnabled(false); return cameraUsbStatus(); });
   ipcMain.handle('koko:camera-folder-status', event => { trusted(event); return cameraFolderStatus(); });
   ipcMain.handle('koko:camera-folder-start', async event => {
     trusted(event);
@@ -1487,12 +1531,16 @@ app.on('ready', () => {
     try { startCameraFolderWatcher(cameraFolderConfig.folderPath); }
     catch (error) { cameraFolderRestoreError = error instanceof Error ? error.message : 'Could not restore the camera folder'; log('camera-folder-restore-failed', error); writeCameraFolderConfig(cameraFolderConfig.folderPath, false); }
   }
+  if (readCameraUsbEnabled()) {
+    try { startCameraUsb(); }
+    catch (error) { log('camera-usb-restore-failed', error); writeCameraUsbEnabled(false); }
+  }
   setTimeout(recoverPendingPhotoCloudUploads, 2000);
   setTimeout(() => { try { memoryQueue(); void drainKokoMemoryQueue(); } catch (error) { log('kokomemory-queue-restore-failed', error); } }, 2500);
   setInterval(() => { void recoverStudioCloudPending(); }, 60_000);
   setInterval(() => { void drainKokoMemoryQueue().catch(error => log('kokomemory-queue-drain-failed', error)); }, 15_000);
 });
-app.on('before-quit', () => { cameraFolderWatcher?.stop(); });
+app.on('before-quit', () => { cameraFolderWatcher?.stop(); stopCameraUsb(); });
 app.on('window-all-closed', () => app.quit());
 process.on('uncaughtException', error => { lastError = 'An application error occurred'; log('uncaught-exception', error); });
 process.on('unhandledRejection', reason => { log('unhandled-rejection', reason); });

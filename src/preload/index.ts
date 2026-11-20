@@ -46,6 +46,9 @@ const bridge: Bridge = {
     ipcRenderer.on('koko:photo-cloud-progress', handler);
     return () => ipcRenderer.removeListener('koko:photo-cloud-progress', handler);
   },
+  getCameraUsbStatus: () => ipcRenderer.invoke('koko:camera-usb-status'),
+  startCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-start'),
+  stopCameraUsb: () => ipcRenderer.invoke('koko:camera-usb-stop'),
   getCameraFolderWatchStatus: () => ipcRenderer.invoke('koko:camera-folder-status'),
   startCameraFolderWatch: () => ipcRenderer.invoke('koko:camera-folder-start'),
   stopCameraFolderWatch: () => ipcRenderer.invoke('koko:camera-folder-stop'),

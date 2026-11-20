@@ -1,5 +1,27 @@
 import { useEffect, useState } from 'react';
-import type { CameraFolderWatchStatus, KokoMemoryStatus } from '../shared/contract';
+import type { CameraFolderWatchStatus, CameraUsbStatus, KokoMemoryStatus } from '../shared/contract';
+
+export function CameraUsbSettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
+  const [usb, setUsb] = useState<CameraUsbStatus>({ enabled: false, camera: null, state: 'off', importedCount: 0, lastError: null });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void window.koko.getCameraUsbStatus().then(setUsb).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!usb.enabled) return;
+    const timer = window.setInterval(() => { void window.koko.getCameraUsbStatus().then(setUsb).catch(() => undefined); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [usb.enabled]);
+  async function toggle() {
+    setBusy(true);
+    try { setUsb(usb.enabled ? await window.koko.stopCameraUsb() : await window.koko.startCameraUsb()); }
+    catch (error) { onMessage(error instanceof Error ? error.message : (th ? 'เปิดการดึงภาพผ่าน USB ไม่สำเร็จ' : 'Could not start USB photo import.')); }
+    finally { setBusy(false); }
+  }
+  const stateText = usb.state === 'ready' ? (th ? `พบกล้อง: ${usb.camera ?? ''}` : `Camera found: ${usb.camera ?? ''}`)
+    : usb.state === 'busy' ? (th ? 'พบกล้องแต่เข้าถึงรูปไม่ได้ ปิดโปรแกรมอื่นที่ใช้กล้องอยู่ (เช่น EOS Webcam Utility) หรือปิดแล้วเปิดกล้องใหม่' : 'Camera found but its photos are not reachable. Close other programs using it (e.g. EOS Webcam Utility) or power-cycle the camera.')
+    : usb.state === 'searching' ? (th ? 'กำลังหากล้องที่เสียบสาย USB…' : 'Looking for a USB camera…')
+    : usb.state === 'error' ? (th ? 'หยุดทำงาน' : 'Stopped') : '';
+  return <section className="storage-settings"><div><strong>{th ? 'ดึงภาพจากกล้องผ่าน USB' : 'USB camera photo import'}</strong><p>{th ? 'เสียบสาย USB แล้วกดชัตเตอร์ที่ตัวกล้อง ภาพเต็มความละเอียดจะเข้าคลังเอง ไม่ต้องลงโปรแกรมเพิ่ม (Windows)' : 'Plug the camera in by USB and press its shutter. Full-resolution photos arrive on their own, no extra software (Windows).'}</p>{usb.enabled && stateText && <small className={usb.state === 'busy' ? 'storage-warning' : undefined}>{stateText}</small>}{usb.enabled && <small>{th ? `นำเข้าแล้ว ${usb.importedCount} ภาพ · ภาพที่มีอยู่ในกล้องก่อนเริ่มจะไม่ถูกดึง` : `${usb.importedCount} photo(s) imported · photos already on the card are skipped`}</small>}{usb.lastError && <small className="storage-warning">{usb.lastError}</small>}</div><button className="camera-secondary" onClick={() => void toggle()} disabled={busy || (!storageReady && !usb.enabled)}>{busy ? (th ? 'กำลังตั้งค่า…' : 'Working…') : usb.enabled ? (th ? 'หยุด' : 'Stop') : (th ? 'เริ่มดึงภาพผ่าน USB' : 'Start USB import')}</button></section>;
+}
 
 export function CameraFolderWatchSettings({ th, storageReady, onMessage }: { th: boolean; storageReady: boolean; onMessage: (value: string) => void }) {
   const [watch, setWatch] = useState<CameraFolderWatchStatus>({ enabled: false, folderPath: null, importedCount: 0, lastError: null });

@@ -12,6 +12,7 @@ export type Settings = { language: Language; highContrast: boolean; fullscreen: 
 export type AppStatus = { version: string; settings: Settings; lastError: string | null; guestExitPinConfigured: boolean; guestModeActive: boolean };
 export type GuestDisplayPayload = { language: Language; eventName: string; status: 'ready' | 'connecting' | 'disconnected' | 'countdown' | 'capturing' | 'review'; mediaMode: 'photo' | 'video'; countdown: number | null; resultCount: number; previewDataUrl: string; qrDataUrl: string; message: string };
 export type PhotoCloudProgress = { sessionId: string; completed: number; total: number; uploadedCount: number };
+export type CameraUsbStatus = { enabled: boolean; camera: string | null; state: 'off' | 'searching' | 'ready' | 'busy' | 'error'; importedCount: number; lastError: string | null };
 export type CameraFolderWatchStatus = { enabled: boolean; folderPath: string | null; importedCount: number; lastError: string | null };
 export type CameraFolderPhotoImport = { fileName: string; photo: PhotoRecord };
 export type KokoMemoryStatus = { configured: boolean; bookingId: string | null; shareId: string | null; apiOrigin: string | null; galleryUrl: string | null; connectionId: string | null };
@@ -74,6 +75,9 @@ export type Bridge = {
   completeCaptureSession(sessionId: string, status: 'review' | 'confirmed' | 'cancelled' | 'retaken'): Promise<CaptureSessionRecord | null>;
   syncPhotoCloudSession(sessionId: string): Promise<{ shareUrl: string | null; uploadedCount: number; mediaCount: number; photoCount: number; videoCount: number; cloudAvailable?: boolean }>;
   onPhotoCloudProgress(listener: (progress: PhotoCloudProgress) => void): () => void;
+  getCameraUsbStatus(): Promise<CameraUsbStatus>;
+  startCameraUsb(): Promise<CameraUsbStatus>;
+  stopCameraUsb(): Promise<CameraUsbStatus>;
   getCameraFolderWatchStatus(): Promise<CameraFolderWatchStatus>;
   startCameraFolderWatch(): Promise<CameraFolderWatchStatus>;
   stopCameraFolderWatch(): Promise<CameraFolderWatchStatus>;

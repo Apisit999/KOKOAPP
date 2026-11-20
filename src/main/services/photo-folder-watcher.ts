@@ -24,8 +24,8 @@ export class PhotoFolderWatcher {
   private failedAt = new Map<string, number>();
   private readonly processed: Set<string>;
 
-  constructor(userDataPath: string, importJpeg: (bytes: Uint8Array, sourceKey: string) => Promise<PhotoRecord>, onImported?: (name: string, photo: PhotoRecord) => void) {
-    this.stateFile = path.join(userDataPath, 'camera-folder-imports.json');
+  constructor(userDataPath: string, importJpeg: (bytes: Uint8Array, sourceKey: string) => Promise<PhotoRecord>, onImported?: (name: string, photo: PhotoRecord) => void, stateFileName = 'camera-folder-imports.json') {
+    this.stateFile = path.join(userDataPath, stateFileName);
     this.importJpeg = importJpeg;
     this.onImported = onImported;
     this.processed = new Set(this.readState().processed);
