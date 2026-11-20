@@ -30,7 +30,11 @@
        service: http://localhost:47831
      - service: http_status:404
    ```
-5. ให้ Tunnel เปิดเองทุกครั้งที่เปิดเครื่อง (PowerShell แบบ Administrator):
+5. ให้ Tunnel เปิดเองทุกครั้งที่ล็อกอินเข้า Windows (ไม่ต้องใช้สิทธิ์ผู้ดูแล) ใน PowerShell:
+   ```
+   schtasks /Create /SC ONLOGON /TN "KOKO Tunnel" /TR "\"C:\Program Files (x86)\cloudflared\cloudflared.exe\" tunnel run koko-booth" /F
+   ```
+   ถ้าขึ้น Access is denied ให้เปิด PowerShell แบบ Administrator แล้วรันคำสั่งเดิมอีกครั้ง หรือใช้วิธีบริการของ Windows (ต้องคัดลอก config.yml และไฟล์ .json ไปไว้ที่ C:\Windows\System32\config\systemprofile\.cloudflared ก่อน):
    ```
    cloudflared service install
    ```

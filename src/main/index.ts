@@ -1053,7 +1053,7 @@ app.on('ready', () => {
     try {
       const response = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       return { ok: response.ok && (await response.text()).trim() === 'ok', status: response.status };
-    } catch (error) { return { ok: false, reason: error instanceof Error ? error.message.slice(0, 160) : 'unreachable' }; }
+    } catch (error) { const code = error instanceof Error ? (error.cause as { code?: unknown } | undefined)?.code : undefined; return { ok: false, reason: typeof code === 'string' ? code : error instanceof Error ? error.message.slice(0, 160) : 'unreachable' }; }
   });
   ipcMain.handle('koko:phone-camera-status', event => { trusted(event); return phoneCamera.status(); });
   ipcMain.handle('koko:phone-camera-start', async event => {
